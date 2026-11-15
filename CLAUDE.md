@@ -7,10 +7,16 @@ Guidance for Claude Code when working in this repository.
 **Continuum Health** is a system for managing patients with sickle cell disease (SCD).
 The first deployment is a pilot in Kenya.
 
-**PRD and docs:** none in the repo yet. The `continuum-dev-workflow` skill asks every
-plan to cite "the Continuum PRD section it implements", so the PRD must be added
-(suggested location: `docs/prd.md`) before feature work starts. Until then, ask the
-user which requirement a feature implements.
+**PRD and docs:**
+- `docs/prd.md` is the **source of truth**. Cite it as "PRD §x.y" using its section numbers.
+  It was converted word-for-word from `docs/CONTINUUM_HEALTH_PRD_CLEANED.docx` (the original,
+  kept for reference). Don't edit `prd.md` by hand outside an agreed PRD revision.
+- `docs/prd-review.md`: gaps, contradictions and 29 open decisions found in the v0 PRD.
+- **The PRD is under revision (v0 baseline).** Three areas are being resolved before any
+  feature work: the SCD core dataset, emergency identification, and the data-model blockers
+  (prd-review §c, §d, §e). Don't start feature plans that depend on these areas.
+  If a task touches an open decision in prd-review §f, ask; don't assume.
+- Section numbers may change in the revision; re-check citations afterwards.
 
 ## 2. Stack (decided; don't revisit without asking)
 
@@ -65,9 +71,11 @@ user which requirement a feature implements.
 - `.claude/skills/`: the three project skills (`continuum-dev-workflow`,
   `continuum-django-backend`, `continuum-frontend`).
 - `CLAUDE.md` (this file).
+- `docs/`: the PRD v0 (`.docx` original and `prd.md`) and `prd-review.md`.
 
 **Missing:**
-- PRD and any product or clinical docs (`docs/`).
+- The revised PRD, with the SCD core dataset, emergency identification and data-model
+  decisions resolved (see prd-review §f).
 - Django project: `manage.py`, `config/` (split settings), `apps/`.
 - `pyproject.toml` with dependencies and ruff/black/mypy/pytest configuration.
 - `.gitignore`, `.env.example`, README.
