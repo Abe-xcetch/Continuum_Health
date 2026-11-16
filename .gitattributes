@@ -10,3 +10,6 @@
 *.jpg binary
 *.ico binary
 *.woff2 binary
+
+# Vendored libraries: store byte-for-byte (SHA-256 recorded in static/vendor/README.md).
+static/vendor/*.js -text

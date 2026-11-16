@@ -1,0 +1,14 @@
+/* Tailwind v4 entry point. Build: scripts/tailwind.ps1 (Windows) or scripts/tailwind.sh.
+   Output static/css/app.css is generated and not committed. */
+@import "tailwindcss" source(none);
+
+@source "../../templates";
+@source "../../apps";
+@source "../js";
+
+/* HTMX request indicators (HTMX's own injected styles are disabled for the strict CSP). */
+@layer components {
+  .htmx-indicator { opacity: 0; transition: opacity 200ms ease-in; }
+  .htmx-request .htmx-indicator,
+  .htmx-request.htmx-indicator { opacity: 1; }
+}
