@@ -1,0 +1,56 @@
+# Install once:  uv run pre-commit install
+# Run all:       uv run pre-commit run --all-files
+# mypy and the test suite run in CI (too slow for every commit).
+# Vendored files must stay byte-identical to their verified upstream releases.
+exclude: ^static/vendor/.*\.js$
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # docs/prd.md is generated from the Word original: never rewrite it.
+      - id: trailing-whitespace
+        args: ["--markdown-linebreak-ext=md"]  # keep Markdown hard line breaks
+        exclude: ^docs/prd\.md$
+      - id: end-of-file-fixer
+        exclude: ^docs/prd\.md$
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+        exclude: ^docs/.*\.docx$
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+        exclude: \.ps1$
+
+  # Use the project's locked tool versions (uv.lock), not separate hook environments.
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint + import order)
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types: [python]
+      - id: black
+        name: black
+        entry: uv run black
+        language: system
+        types: [python]
+      - id: bandit
+        name: bandit
+        entry: uv run bandit -q -c pyproject.toml
+        language: system
+        types: [python]
+        exclude: (^|/)tests/
+      - id: no-env-files
+        name: block .env files (secrets)
+        entry: .env files must never be committed
+        language: fail
+        files: (^|/)\.env$
+      - id: no-vendored-css-build
+        name: block generated Tailwind output
+        entry: static/css/app.css is generated; run scripts/tailwind.ps1 instead of committing it
+        language: fail
+        files: ^static/css/app\.css$
