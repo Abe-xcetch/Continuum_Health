@@ -25,7 +25,7 @@ The first deployment is a pilot in Kenya.
 - **Frontend:** Django templates + HTMX + Alpine.js + Tailwind CSS. HTMX, Alpine and
   Tailwind are bundled locally, with no CDN in production.
 - **Async:** Celery + Redis only where a task truly needs it (SMS reminders, reports, imports).
-- **Tooling:** pytest-django, factory_boy, ruff, black, mypy (django-stubs).
+- **Tooling:** uv (packaging), pytest-django, factory_boy, ruff, black, mypy (django-stubs).
   Bandit and pip-audit are used for security checks.
 
 ## 3. Development environment
@@ -64,50 +64,53 @@ The first deployment is a pilot in Kenya.
 - Every view and endpoint has an explicit permission check, tested for both allowed and denied cases.
 - Use UUIDs in URLs and APIs, never sequential IDs.
 
-## 6. Current state (as of 2026-11-15)
+## 6. Current state (as of 2026-11-16)
 
-**Exists:**
-- An empty git repo on `main` with no commits yet.
-- `.claude/skills/`: the three project skills (`continuum-dev-workflow`,
-  `continuum-django-backend`, `continuum-frontend`).
-- `CLAUDE.md` (this file).
-- `docs/`: the PRD v0 (`.docx` original and `prd.md`) and `prd-review.md`.
+**Exists (foundation only):**
+- Django 5.2 LTS project, managed with **uv** (`uv.lock`, Python 3.12): split settings in
+  `config/settings/`, all secrets read from `.env` (never committed).
+- `apps/core`: `ContinuumModel` abstract base (UUID `public_id`, timestamps,
+  `created_by`/`updated_by` via `set_actor()`, soft delete with `objects` / `all_objects`).
+  There is **no hard-delete method**; see `docs/decisions-pending.md` for the pending purge
+  policy. Also request-ID logging, a placeholder home page and `/health/`.
+- `apps/accounts`: custom `User` with **email login for staff/clinician accounts only**.
+  **Patient login is an open decision** (Continuum ID / phone + OTP, PRD §11.4), likely a
+  separate authentication path. Don't add patient fields to `User`.
+- Frontend: `templates/base.html`, `components/`, Tailwind 4 standalone CLI, vendored HTMX 2 +
+  Alpine (CSP build), strict CSP (no inline scripts or styles; register Alpine components
+  in `static/js/app.js`).
+- pytest-django on PostgreSQL, pre-commit, GitHub Actions CI. `docs/`: PRD v0 and review.
 
-**Missing:**
-- The revised PRD, with the SCD core dataset, emergency identification and data-model
-  decisions resolved (see prd-review §f).
-- Django project: `manage.py`, `config/` (split settings), `apps/`.
-- `pyproject.toml` with dependencies and ruff/black/mypy/pytest configuration.
-- `.gitignore`, `.env.example`, README.
-- Test setup: `conftest.py`, factories and `config/settings/test.py`.
-- Tailwind build, static assets, and `templates/base.html`.
-- CI pipeline and a pre-commit configuration.
+**Missing (blocked on PRD decisions):** patient, SCD dataset, verification, identifiers,
+consent, emergency access, roles, facilities and guardian models.
 
-## 7. Common commands
-
-Placeholders: fill these in once the Django project exists.
+## 7. Common commands (PowerShell)
 
 ```powershell
-# Setup
-py -3.12 -m venv .venv
-.venv\Scripts\Activate.ps1
-# TODO: pip install -e ".[dev]"   (or the chosen dependency tool)
-# TODO: copy .env.example to .env and set DATABASE_URL, SECRET_KEY, ...
+# Setup (see README for the full first-time steps)
+uv sync                                         # install from uv.lock
+Copy-Item .env.example .env                     # then set DJANGO_SECRET_KEY and DB password
 
 # Run
-# TODO: python manage.py runserver
-# TODO: Tailwind watch command
+uv run python manage.py runserver
+.\scripts	ailwind.ps1 -Watch                    # CSS rebuild while editing templates
 
 # Migrate
-# TODO: python manage.py makemigrations
-# TODO: python manage.py migrate
-# TODO: python manage.py makemigrations --check --dry-run   (CI check)
+uv run python manage.py makemigrations
+uv run python manage.py migrate
+uv run python manage.py makemigrations --check --dry-run
 
 # Test
-# TODO: pytest --reuse-db
-# TODO: pytest --cov=apps --cov-report=term-missing
+uv run pytest                                   # PostgreSQL, migrations, --reuse-db
+uv run pytest --create-db --cov --cov-report=term-missing
 
 # Quality
-# TODO: ruff check . ; black --check . ; mypy .
-# TODO: python manage.py check ; bandit -r apps ; pip-audit
+uv run ruff check . ; uv run black --check . ; uv run mypy .
+uv run python manage.py check
+uv run bandit -q -c pyproject.toml -r apps config
+uv export --format requirements-txt --no-hashes --all-groups -q > $env:TEMP
+eq.txt
+uv run pip-audit -r $env:TEMP
+eq.txt
+uv run pre-commit run --all-files
 ```
