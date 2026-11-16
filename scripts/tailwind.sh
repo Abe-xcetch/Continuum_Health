@@ -19,4 +19,4 @@ if [[ ! -x "$BIN" ]]; then
   chmod +x "$BIN"
 fi
 
-"$BIN" -i "$ROOT/static/src/app.css" -o "$ROOT/static/css/app.css" --minify "$@"
+"$BIN" -i "$ROOT/assets/tailwind.css" -o "$ROOT/static/css/app.css" --minify "$@"

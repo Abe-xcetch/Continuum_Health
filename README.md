@@ -81,7 +81,8 @@ apps/core/         abstract base models (UUID public_id, timestamps, created_by/
                    soft delete), request-ID logging, home page, /health/
 apps/accounts/     custom User: email login for staff/clinician accounts only
 templates/         base.html, components/, per-app pages and partials
-static/            src/app.css (Tailwind input), js/, vendor/ (pinned HTMX + Alpine)
+assets/            tailwind.css (Tailwind input, kept out of static/ so collectstatic skips it)
+static/            js/, vendor/ (pinned HTMX + Alpine), css/app.css (generated, not committed)
 scripts/           tailwind.ps1 (Windows), tailwind.sh (CI/Linux)
 docs/              PRD, PRD review, pending decisions
 ```

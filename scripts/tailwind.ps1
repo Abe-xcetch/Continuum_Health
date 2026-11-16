@@ -32,9 +32,13 @@ if (-not (Test-Path $Exe)) {
     Move-Item $Tmp $Exe
 }
 
-$InputCss = Join-Path $Root "static\src\app.css"
+$InputCss = Join-Path $Root "assets\tailwind.css"
 $OutputCss = Join-Path $Root "static\css\app.css"
 
+# The CLI writes its banner and progress to stderr. Under "Stop", Windows PowerShell 5.1
+# turns that into a terminating error when output is redirected (2>&1), so rely on the
+# exit code instead.
+$ErrorActionPreference = "Continue"
 if ($Watch) {
     & $Exe -i $InputCss -o $OutputCss --watch
 } else {

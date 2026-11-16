@@ -1,10 +1,12 @@
 /* Tailwind v4 entry point. Build: scripts/tailwind.ps1 (Windows) or scripts/tailwind.sh.
-   Output static/css/app.css is generated and not committed. */
+   Output static/css/app.css is generated and not committed.
+   This source lives outside static/ so collectstatic never publishes or post-processes it
+   (its @import "tailwindcss" is not a real file). */
 @import "tailwindcss" source(none);
 
-@source "../../templates";
-@source "../../apps";
-@source "../js";
+@source "../templates";
+@source "../apps";
+@source "../static/js";
 
 /* HTMX request indicators (HTMX's own injected styles are disabled for the strict CSP). */
 @layer components {
