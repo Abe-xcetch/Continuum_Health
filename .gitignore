@@ -48,3 +48,7 @@ desktop.ini
 ehthumbs.db
 $RECYCLE.BIN/
 .DS_Store
+
+# Tailwind standalone CLI binary and generated CSS (built locally and in CI)
+bin/
+static/css/app.css

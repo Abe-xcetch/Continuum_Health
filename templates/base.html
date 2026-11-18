@@ -1,0 +1,40 @@
+{% load static %}<!doctype html>
+<html lang="en" class="h-full bg-slate-50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# HTMX must not inject inline styles: our CSP forbids unsafe-inline. #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  <title>{% block title %}Continuum Health{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  {# Order matters: app.js registers Alpine components before Alpine starts. #}
+  <script src="{% static 'vendor/htmx-2.0.11.min.js' %}" defer></script>
+  <script src="{% static 'js/app.js' %}" defer></script>
+  <script src="{% static 'vendor/alpine-csp-3.17.5.min.js' %}" defer></script>
+</head>
+<body class="h-full text-slate-900 antialiased" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+  <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:bg-white focus:px-4 focus:py-2 focus:outline-2 focus:outline-blue-700">Skip to main content</a>
+
+  <header class="border-b border-slate-200 bg-white">
+    <div class="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3">
+      <a href="{% url 'core:home' %}" class="text-lg font-semibold text-blue-800 focus-visible:outline-2 focus-visible:outline-blue-700">Continuum Health</a>
+      {% if user.is_authenticated %}
+        <form method="post" action="{% url 'accounts:logout' %}">
+          {% csrf_token %}
+          {% include "components/_button.html" with label="Log out" variant="secondary" %}
+        </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <div aria-live="polite" class="mx-auto max-w-5xl px-4">
+    {% for message in messages %}
+      {% include "components/_alert.html" with text=message tone=message.tags %}
+    {% endfor %}
+  </div>
+
+  <main id="main" class="mx-auto max-w-5xl px-4 py-8" tabindex="-1">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

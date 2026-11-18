@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+  # Throwaway values for CI only; real secrets never live in the repository.
+  DJANGO_SECRET_KEY: ci-only-not-a-secret-0123456789abcdefghijklmnopqrstuvwxyz
+  DATABASE_URL: postgres://postgres:postgres@localhost:5432/continuum_ci
+
+jobs:
+  lint:
+    name: Lint (ruff, black)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run black --check .
+
+  types:
+    name: Types (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run mypy .
+
+  security:
+    name: Security (bandit, pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run bandit -q -c pyproject.toml -r apps config
+      - name: pip-audit (locked dependencies)
+        run: |
+          uv export --format requirements-txt --no-hashes --all-groups -q > requirements-audit.txt
+          uv run pip-audit -r requirements-audit.txt --progress-spinner off
+
+  test:
+    name: Tests (PostgreSQL 17, migrations, frontend build)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: continuum_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - name: Build CSS (Tailwind standalone CLI, checksum-verified)
+        run: bash scripts/tailwind.sh
+      - run: uv run python manage.py check
+      - name: Migrations are complete
+        run: uv run python manage.py makemigrations --check --dry-run
+      - name: Migrations apply
+        run: uv run python manage.py migrate --noinput
+      - name: Tests with coverage
+        run: uv run pytest --create-db --cov --cov-report=term-missing
+      - name: Static files collect (production storage)
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.production
+          DJANGO_ALLOWED_HOSTS: localhost
+        run: uv run python manage.py collectstatic --noinput

@@ -1,0 +1,8 @@
+{% comment %}
+Button. Context: label (required), type ("submit" default), variant ("primary" | "secondary").
+During an HTMX request, forms should add hx-disabled-elt="find button" to prevent double submits.
+{% endcomment %}
+<button type="{{ type|default:'submit' }}"
+  class="inline-flex min-h-11 items-center justify-center rounded-md px-4 py-2 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 disabled:cursor-not-allowed disabled:opacity-60 {% if variant == 'secondary' %}border border-slate-300 bg-white text-slate-800 hover:bg-slate-100{% else %}bg-blue-700 text-white hover:bg-blue-800{% endif %}">
+  {{ label }}
+</button>

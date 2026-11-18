@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Log in · Continuum Health{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+  <h1 class="mb-1 text-2xl font-semibold">Log in</h1>
+  <p class="mb-6 text-sm text-slate-600">For healthcare staff and Continuum administrators.</p>
+
+  {% if form.non_field_errors %}
+    {% for error in form.non_field_errors %}
+      {% include "components/_alert.html" with text=error tone="error" %}
+    {% endfor %}
+  {% endif %}
+
+  <form method="post" action="{% url 'accounts:login' %}" novalidate>
+    {% csrf_token %}
+    {% include "components/_form_field.html" with field=form.username %}
+    {% include "components/_form_field.html" with field=form.password %}
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    {% include "components/_button.html" with label="Log in" %}
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% comment %}
+Form field with label, help text and errors next to the field.
+Context: field (a bound field from a form using apps.core.forms.AccessibleFormMixin,
+which adds styling, aria-describedby and aria-invalid to the widget).
+{% endcomment %}
+<div class="mb-4">
+  <label for="{{ field.id_for_label }}" class="mb-1 block text-sm font-medium text-slate-800">
+    {{ field.label }}{% if field.field.required %} <span aria-hidden="true">*</span>{% endif %}
+  </label>
+  {{ field }}
+  {% if field.help_text %}
+    <p id="{{ field.auto_id }}_help" class="mt-1 text-sm text-slate-600">{{ field.help_text }}</p>
+  {% endif %}
+  {% if field.errors %}
+    <div id="{{ field.auto_id }}_error" role="alert" class="mt-1 text-sm text-red-800">
+      {% for error in field.errors %}<p><span class="font-semibold">Error:</span> {{ error }}</p>{% endfor %}
+    </div>
+  {% endif %}
+</div>
