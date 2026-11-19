@@ -1,52 +1,71 @@
 # ADR 0004: Emergency access
 
-- **Status:** Accepted for 4a, 4b and 4d. **4c is proposed: one member still to confirm.**
-- **Date:** 2026-11-16 · **Deciders:** JK, FK
-- **Resolves:** prd-review §f Q14, Q16, Q17, Q18 (partly Q19); prd-review §d gaps 1, 2, 6
+- **Status:** Accepted for 4a, 4b, 4c and 4d. The 4a summary content and the 4b cadres are
+  **provisional, awaiting clinical-lead sign-off**. The 4c SMS design is **proposed,
+  pending group confirmation**.
+- **Date:** 2026-11-16; amended 2026-11-19 · **Deciders:** JK, FK
+- **Resolves:** prd-review §f Q14, Q16, Q17, Q18, Q19; prd-review §d gaps 1, 2, 6
 
 ## Context
 
 The PRD does not say what emergency access shows (§7.6 vs §12.2.2 vs §12.2.5), what the
-automatic approval rules are (§9.3.5), whether unverified items are visible (§12.2.2 says
-"verified" while §12.2.5 Scenario D says unverified items are shown, labelled), or how a
-clinician learns that a patient has SCD before searching (prd-review §d gap 1). Biometrics
-appear in MVP features (§10.4) but are out of scope (§11.4, §16.6).
+automatic approval rules are (§9.3.5), whether unverified items are visible, or how a
+clinician learns that a patient has SCD before searching. Biometrics appear in the MVP
+features (§10.4) but are out of scope (§11.4, §16.6).
 
 ## Decision
 
-**4a. What emergency access shows.** The **emergency summary only** (PRD §7.6). Unverified
-items are shown, clearly **labelled as unverified**; they are never hidden and never
-presented as verified.
+**4a. What emergency access shows:** the **emergency summary only**. Unverified items are
+shown, clearly labelled as unverified.
 
-**4b. Break-glass.**
-- **Who:** any authenticated clinician acting at a registered facility.
+*Summary content, provisional (19 Nov):*
+- SCD and genotype
+- allergies
+- blood group and Rh
+- transfusion reactions
+- current medicines, including hydroxyurea
+- pain management / things to avoid
+- emergency contact
+- usual facility
+
+**4b. Break-glass:**
+- **Who:** an authenticated clinician at a registered facility. **Only medical officers and
+  clinical officers** may invoke it (*provisional, 19 Nov*).
 - **Requires** a reason.
 - **Expires** after 12 hours.
 - **Logged** in full.
 - The **patient is notified by SMS**.
-- Every use is **reviewed afterwards** (post-hoc review).
-- Approval is automatic once the conditions and reason are given (PRD §13.1.6 pilot rule).
+- Every use gets a **post-hoc review**.
+- Approval is automatic once the conditions and reason are given.
 
-**4c. Patient card / QR.** *Proposed, one member to confirm.* Patients may carry a card
-whose face and QR code show only "**Sickle Cell Disease**" and the **Continuum ID**. No
-name, no other clinical data.
+**4c. No card or QR** *(decided 19 Nov; replaces the proposed card/QR).* Instead:
+- *Proposed, pending group confirmation:* at enrolment the patient receives their
+  **Continuum ID by SMS**.
+- **No medical information is ever sent by SMS**, in any message.
 
-**4d. Unconscious patient without documents** is **out of MVP scope**. Biometric
-identification is **removed** from the MVP. Treatment proceeds as normal care without
-Continuum (PRD §8.5.1.2, §11.5.2).
+**4d. An unconscious patient without documents** is out of MVP scope, and biometric
+identification is removed. Treatment proceeds as normal care without Continuum.
 
 ## Consequences
 
-- Data model: `BreakGlassAccess` (12-hour expiry enforced by a database check),
-  `EmergencyCard` (revocable token), and the emergency summary as a **view** over existing
-  records, never a copy (PRD §7.6).
-- An SMS provider becomes an MVP dependency. A patient with no phone (PRD §8.9) gets no SMS;
-  the event still appears in their access history.
-- Biometric items in PRD §8.5.1.1, §9.1.1 and §10.4 must be removed in the revision.
-- **Open:** which cadres count as "clinician" for break-glass (nurses? clinical officers?
-  never lab staff?). PRD §6.3 / §9.2 restrict nurses to when no physician is available.
-- **Open:** whether break-glass can ever reach beyond the summary. PRD §12.2.5 allows
-  emergency access to restricted information; 4a does not.
-- **Open:** who performs the post-hoc review, and within how long.
-- **Open (4c):** printing "Sickle Cell Disease" on a card discloses a diagnosis to anyone who
-  sees it. Issuing a card should need the patient's (or guardian's) explicit agreement.
+- **Data model** (`docs/data-model.md`):
+  - `BreakGlassAccess`, with the 12-hour limit enforced by the database
+  - `Cadre.may_break_glass` (MO and CO true)
+  - `SmsMessage` with fixed templates and no stored message body
+- **The `EmergencyCard` model is removed** from the plan.
+- **The emergency summary is a view over existing records**, never a copy.
+- **The break-glass SMS** says only that the record was opened, and when, with a contact
+  number. It names no diagnosis and no facility.
+- **An SMS provider** becomes an MVP dependency. A patient with no phone gets no SMS; the
+  event still appears in their access history.
+- **PRD change:**
+  - remove biometrics (PC-6)
+  - emergency summary scope (PC-8)
+  - break-glass rules (PC-9)
+  - Continuum ID by SMS (PC-13, proposed)
+- **Open:**
+  - Q-E3: who reviews break-glass events, and within how long
+  - Q-E4: SMS recipient for a minor
+  - Q-S1: whether the sender name "Continuum" itself reveals SCD if the service is
+    SCD-only
+  - whether restricted information can ever be reached in an emergency (prd-review Q21)

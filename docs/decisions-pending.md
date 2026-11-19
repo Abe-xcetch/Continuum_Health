@@ -5,30 +5,68 @@ Product decisions live in `docs/prd-review.md` §f. Decisions already made are r
 ADRs in `docs/decisions/`; the detailed list of open data-model questions is in
 `docs/data-model.md` §5.
 
-## Status of prd-review §f after the 16 and 18 Nov 2026 decisions
+## Scope question: SCD-only, or other chronic illnesses?
+
+**Status:** open (raised 19 Nov 2026). **Decide before build step 5** (the dataset).
+
+PRD §16.2 puts other diseases out of scope, and §17.2 lists them as future work. Should the
+pilot design stay **SCD-only**, or **anticipate other chronic illnesses** (e.g. diabetes,
+HIV, hypertension)?
+
+What changes:
+- **Dataset:** `DatasetElement` would need a condition/programme key (e.g. `scd`), with
+  per-condition required elements and completeness. This is cheap to add now, and a
+  migration later.
+- **Patient:** "SCD confirmed" would become one entry in a list of the patient's
+  conditions.
+- **Emergency summary and verification categories:** they would become per condition.
+- **Privacy:** if Continuum is known as an SCD-only service, then being in it, receiving
+  its SMS or being on its lists reveals the diagnosis (data-model Q-S1). A multi-condition
+  service reduces that.
+- **Consent categories:** "full SCD record" would need generalising.
+
+Recommendation, for the group to decide:
+- Keep the **pilot SCD-only**.
+- Add only the cheap hooks now: a `condition` key on dataset elements, and neutral
+  branding and SMS wording.
+
+## Status of prd-review §f after the 16, 18 and 19 Nov 2026 decisions
+
+Status labels:
+- *provisional*: a team clinical answer awaiting clinical-lead sign-off.
+- *proposed*: pending group confirmation.
 
 **Decided (ADRs 0001–0007; PRD changes in `docs/prd-changes.md`):**
-- Q9, Q10 verification, amended 18 Nov: `unverified` + `source` (ADR 0001)
-- Q5 dataset and Q6 blood group, now the agreed list (ADR 0002)
-- Q12, Q13 identifiers and matching; sex required, gender optional (ADR 0003)
-- Q14, Q16, Q17, Q18 emergency (ADR 0004)
-- Q20 consent to a care team at a facility (ADR 0005, amended 18 Nov)
-- Q3 minors in the data model (ADR 0006)
+- Q9, Q10 verification: `unverified` + `source` (ADR 0001)
+- Q5, Q6 dataset and blood group (ADR 0002; list *provisional*)
+- Q12, Q13 identifiers and matching; **sex only** (ADR 0003)
+- Q14 no card or QR (ADR 0004 4c); Q16, Q17, Q18 emergency (ADR 0004)
+- Q19 break-glass cadres: MO and CO (*provisional*)
+- Q20 consent to a care team, with **OTP at every visit** (ADR 0005, option B)
+- Q3 minors in the data model; **the pilot enrols adults and children** (ADR 0006;
+  *provisional*)
 - Multi-facility design (ADR 0007)
-- Modelling choices accepted 18 Nov (data-model M2–M5):
-  - typed dataset table with guard rails and a reporting view
-  - supersession rows for history
-  - PostgreSQL triggers created by migrations and tested
-  - `pg_trgm`
+- Modelling choices M2–M5: typed dataset table, now including `integer`; supersession
+  history; triggers; `pg_trgm`
 
-**Decided but awaiting sign-off or confirmation:**
-- ADR 0001 cadre-to-category verification rules: clinical lead.
-- ADR 0002 agreed element list: clinical lead. Includes the hydroxyurea dose unit, the
-  definition of a hospitalisation, and which elements appear in the emergency summary.
-- ADR 0004 4c emergency card / QR: one group member to confirm.
-- ADR 0005 item 5, no OTP at each visit under standing consent: **proposed**, pending group
-  confirmation.
-- ADR 0006 pilot enrolment of children: clinical lead and ethics approval.
+**Awaiting clinical-lead sign-off** (*provisional*):
+- Verification defaults (ADR 0001)
+- The dataset element list and its flags (ADR 0002; data-model §3.6 ⚑1–⚑5):
+  - genotype Required vs Optional
+  - the meaning of the transfusion "number"
+  - genotype as a lab value / the sickling screen
+  - emergency summary content
+- Hydroxyurea dose in mg/day; hospitalisation = any ward admission
+- Break-glass cadres MO and CO; emergency summary content (ADR 0004)
+- Enrolling children (ADR 0006; also needs ethics approval)
+
+**Proposed, pending group confirmation:**
+- Visit session until the visit ends, at most 12 h; OTP fallback with break-glass-style
+  review (ADR 0005)
+- The SMS design: Continuum ID at enrolment, fixed templates, no medical information
+  (ADR 0004 4c)
+- Q-D6: admissions recorded from enrolment; treatment history and responses in phase 2
+  (ADR 0002)
 
 **Still open from prd-review §f:**
 - Q1 entry points
@@ -36,29 +74,25 @@ ADRs in `docs/decisions/`; the detailed list of open data-model questions is in
 - Q4 hospital integration
 - Q7 lab-result structure
 - Q8 care-plan structure and review interval
-- Q11 which nurse- or lab-entered items need verification (partly covered by the
-  configurable rules)
-- Q15 search by emergency-contact phone
-- Q19 which cadres count as "clinician" for break-glass
+- Q11 (partly covered by the configurable rules)
+- Q15 emergency-contact search
 - Q21 restricted categories
-- Q22, Q23 administrator access to patient data
+- Q22, Q23 administrator access
 - Q24 closure / retention
 - Q25 deceased / inactive
-- Q26 notification channels (SMS is now required for break-glass)
-- Q27 audit granularity (plan: per section)
+- Q26 notification channels (SMS is now required)
+- Q27 audit granularity
 - Q28 medical-records role
 - Q29 PRD hygiene
 
-**Still open from the data-model plan** (details in `docs/data-model.md` §5):
-- Q-V2 to Q-V5 (verification details)
-- Q-I1 to Q-I5 (identifiers; includes encrypting national ID / SHA numbers)
-- Q-C3 to Q-C5, Q-A1 to Q-A3 (access)
-- Q-E1 to Q-E4 (emergency; includes the break-glass reviewer and deadline)
-- Q-G1, Q-G2 (minors)
-- Q-T1 (`pg_trgm` privilege in production)
-- Q-R1 (who reads the reporting view)
-- Q-M6 (app split)
-- Choice of SMS provider
+**Still open from the data-model plan** (`docs/data-model.md` §5):
+- Q-D3 to Q-D9: dataset details
+- Q-V2 to Q-V6: verification, including consultants
+- Q-I1 to Q-I5: identifiers
+- Q-C3 to Q-C8, Q-A1 to Q-A3: consent, visits, access
+- Q-E3, Q-E4, Q-S1 to Q-S3: emergency and SMS, including the SMS provider
+- Q-G1 to Q-G3: minors
+- Q-T1, Q-R1, Q-M6: technical
 
 ## TODO: controlled, audited purge for retention / erasure requests
 

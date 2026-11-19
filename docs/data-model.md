@@ -2,18 +2,15 @@
 
 - **Status:** PLAN ONLY. No models or migrations exist yet. Each model still goes through
   plan → tests → implementation under `continuum-dev-workflow` (CLAUDE.md §5).
-- **Date:** 2026-11-18
+- **Updated:** 2026-11-19
 - **Based on:** `docs/prd.md` (v0, unrevised), `docs/prd-review.md`, ADRs 0001–0007 in
-  `docs/decisions/`, and the group's answers of 18 Nov 2026:
-  - Q-V1: `unverified` + `source` (decided)
-  - Q-C1 / Q-M1: care teams (decided)
-  - D5: sex and gender (decided)
-  - Q-C2: no OTP under standing consent (**proposed**, pending group confirmation)
-  - M2–M5: modelling choices (accepted)
-  - SCD dataset: the agreed list (awaiting clinical-lead sign-off)
-- **Where the PRD and an ADR disagree,** the model follows the ADR. The disagreement is
-  listed in §4, and decided PRD changes are logged in `docs/prd-changes.md`. Open questions
-  are in §5.
+  `docs/decisions/`, and the group's answers of 16, 18 and 19 Nov 2026.
+- **Status labels used below:**
+  - **Decided:** the group agreed it.
+  - **Provisional:** a clinical answer from the team, *awaiting clinical-lead sign-off*.
+  - **Proposed:** pending group confirmation.
+- **Where the PRD and an ADR disagree,** the model follows the ADR (§4). Decided PRD changes
+  are in `docs/prd-changes.md`. Open questions are in §5.
 
 All examples use synthetic data. Nothing here changes `docs/prd.md`.
 
@@ -27,13 +24,14 @@ All examples use synthetic data. Nothing here changes `docs/prd.md`.
 |---|---|
 | `apps/facilities` | Facility, CareTeam |
 | `apps/staff` | Cadre, StaffProfile, FacilityMembership, CareTeamMembership, VerificationPermission |
-| `apps/patients` | Patient, PatientIdentifier, EmergencyContact, GuardianRelationship, EmergencyCard |
-| `apps/clinical` | CodeSystem, Code, DatasetElement, CoreDatasetItem, Allergy, PatientComplication, Medication, GenotypeTest, TransfusionAlert, UsualCareProvider, EmergencyCarePlan, VerificationEvent; reporting view `clinical_scd_dataset_wide` |
-| `apps/access` | Consent, BreakGlassAccess, AccessSession, AccessEvent, SearchEvent |
+| `apps/patients` | Patient, PatientIdentifier, EmergencyContact, GuardianRelationship |
+| `apps/clinical` | CodeSystem, Code, DatasetElement, CoreDatasetItem, Allergy, PatientComplication, Medication, GenotypeTest, TransfusionAlert, Admission, UsualCareProvider, EmergencyCarePlan, VerificationEvent; reporting view `clinical_scd_dataset_wide` |
+| `apps/access` | Consent, VisitAuthorisation, OtpChallenge, BreakGlassAccess, AccessSession, AccessEvent, SearchEvent |
+| `apps/notifications` | SmsMessage |
 
 `apps/accounts.User` stays as it is: staff log in with email. Patients and guardians have
 **no login yet** (`docs/decisions-pending.md`). Patient-side accounts will link to
-`Patient` / `GuardianRelationship` later through a nullable FK; none of these models
+`Patient` / `GuardianRelationship` later through a nullable FK, and none of these models
 depends on them.
 
 ### 1.2 Base classes and what each model uses
@@ -53,8 +51,10 @@ New, proposed:
   `source_facility`, supersession) (§3.7).
 - **L** = `AppendOnlyModel` (abstract, `apps/core`): P + `created_at` only. `save()` refuses
   updates and `delete()` raises an error. A **PostgreSQL trigger** blocks `UPDATE` and
-  `DELETE` (PRD §13.1.8). The trigger is created by a migration and tested (M4,
-  accepted). No soft delete, because nothing is ever deleted.
+  `DELETE` (PRD §13.1.8). The trigger is created by a migration and tested (M4, accepted).
+- **G** = **guarded columns**: the row may be updated, but a trigger allows only a named set
+  of columns to change after insert (e.g. review fields on `BreakGlassAccess`). It shares
+  the trigger helper with L.
 
 ### 1.3 Rules applied everywhere
 
@@ -63,17 +63,17 @@ New, proposed:
   - **No `CASCADE`** anywhere.
 - **Integer primary keys stay internal;** URLs use `public_id`.
 - **Nothing identifying goes into application logs or `SearchEvent`:** no identifier
-  value, name, phone number or clinical value.
+  value, name, phone number, OTP code or clinical value.
+- **No medical information is ever sent by SMS** (ADR 0004). SMS bodies are fixed, reviewed
+  templates, and message bodies are never stored (§3.14).
 - **Coded values** use `TextChoices` when the list is fixed by the software, and the `Code`
   reference table when clinicians maintain the list.
-- **Measured values** use `DecimalField`.
+- **Measured values** use `DecimalField`; **counts** use integers.
 - **Live-row uniqueness** uses partial `UniqueConstraint(..., condition=Q(deleted_at=None))`.
 - **Clinical values are never overwritten** (PRD §7.8; M3, accepted). A change creates a new
-  row that `supersedes` the old one, and the old row stops being `is_current`.
-  Verification-status changes go to `VerificationEvent`. There is no history-table library.
-- **Rules the database can't express with a `CHECK`** (they need a lookup in another table)
-  are enforced with PostgreSQL triggers created in migrations, each with tests for allowed
-  and rejected writes (M4).
+  row that `supersedes` the old one.
+- **Rules a `CHECK` can't express** (they need a lookup in another table) are enforced with
+  PostgreSQL triggers created in migrations and covered by tests (M4).
 
 ---
 
@@ -94,7 +94,6 @@ erDiagram
     Facility ||--o{ PatientIdentifier : "issues (hospital no.)"
     Patient ||--o{ EmergencyContact : has
     Patient ||--o{ GuardianRelationship : "minor in"
-    Patient ||--o{ EmergencyCard : carries
 
     DatasetElement ||--o{ CoreDatasetItem : defines
     CodeSystem ||--o{ DatasetElement : "value set"
@@ -103,62 +102,57 @@ erDiagram
     Patient ||--o{ CoreDatasetItem : has
     Patient ||--o{ Allergy : has
     Patient ||--o{ PatientComplication : has
-    Code ||--o{ PatientComplication : complication
     Patient ||--o{ Medication : takes
     Patient ||--o{ GenotypeTest : had
     Patient ||--o{ TransfusionAlert : has
+    Patient ||--o{ Admission : "admitted (from enrolment)"
     Patient ||--o{ UsualCareProvider : "usually seen by"
-    Facility |o--o{ UsualCareProvider : "usual facility"
-    StaffProfile |o--o{ UsualCareProvider : "usual clinician"
     Patient ||--o{ EmergencyCarePlan : has
     VerificationEvent }o--|| User : by
 
     Patient ||--o{ Consent : gives
-    CareTeam ||--o{ Consent : receives
+    CareTeam ||--o{ Consent : "made eligible"
+    CareTeam ||--o{ VisitAuthorisation : "authorised for visit"
+    Patient ||--o{ VisitAuthorisation : "authorises"
+    OtpChallenge |o--o| VisitAuthorisation : "confirms"
+    OtpChallenge |o--o| Consent : "confirms grant"
+    Patient ||--o{ OtpChallenge : "receives"
     Patient ||--o{ BreakGlassAccess : "subject of"
     StaffProfile ||--o{ BreakGlassAccess : invokes
-    Facility ||--o{ BreakGlassAccess : at
     Patient ||--o{ AccessSession : "opened in"
     User ||--o{ AccessSession : opens
-    Facility ||--o{ AccessSession : "acting at"
-    Consent |o--o{ AccessSession : basis
+    VisitAuthorisation |o--o{ AccessSession : basis
     BreakGlassAccess |o--o{ AccessSession : basis
     AccessSession ||--o{ AccessEvent : records
     User ||--o{ SearchEvent : searches
+    Patient ||--o{ SmsMessage : "sent to"
 
     Patient {
         uuid public_id UK
         string continuum_id UK
         date date_of_birth
-        string sex "required"
-        string gender "optional"
+        string sex "required; no gender field"
         string account_status
-    }
-    DatasetElement {
-        string key UK
-        string data_type "code|decimal|date|boolean|linked"
-        string requirement
     }
     CoreDatasetItem {
         fk value_code
         decimal value_decimal
+        int value_integer
         date value_date
         bool value_boolean
         string null_reason "none|unknown"
         bool is_current
-        string verification_status
     }
-    Consent {
-        string category
-        datetime granted_at
-        datetime revoked_at
-        date review_due_on
+    VisitAuthorisation {
+        string method "otp|fallback"
+        datetime started_at
+        datetime expires_at "max 12h (proposed)"
+        datetime ended_at
     }
     BreakGlassAccess {
         string reason_code
-        text reason_text
         datetime started_at
-        datetime expires_at
+        datetime expires_at "max 12h"
         datetime reviewed_at
     }
     AccessSession {
@@ -170,8 +164,8 @@ erDiagram
 ```
 
 The clinical item models (`CoreDatasetItem`, `Allergy`, `PatientComplication`, `Medication`,
-`GenotypeTest`, `TransfusionAlert`, `EmergencyCarePlan`) all carry the `ClinicalItem`
-fields (§3.7). They are omitted from the diagram for space.
+`GenotypeTest`, `TransfusionAlert`, `Admission`, `EmergencyCarePlan`) all carry the
+`ClinicalItem` fields (§3.7). They are omitted from the diagram for space.
 
 ---
 
@@ -179,28 +173,26 @@ fields (§3.7). They are omitted from the diagram for space.
 
 ### 3.1 Facility (`apps/facilities`)
 
-**Purpose:** a healthcare facility. Participating facilities are `active`. Non-participating
-facilities can appear as free text on the clinical models that allow it.
-**Implements:** PRD §7.2 (Facility ID), §11.3, §12.4.1; ADR 0007. **Uses:** P T A S.
+**Purpose:** a healthcare facility. Participating facilities are `active`.
+**Implements:** PRD §7.2, §11.3, §12.4.1; ADR 0007. **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
-| `facility_code` | `CharField(12)`, unique | Continuum Facility ID, system-generated, immutable. Format TBC (PRD §7.2); proposed `FAC-XXXXXX` |
+| `facility_code` | `CharField(12)`, unique | Continuum Facility ID, generated, immutable; format TBC (PRD §7.2) |
 | `name` | `CharField(200)` | |
-| `kmhfl_code` | `CharField(20)`, null, unique | Kenya Master Health Facility List code, if known |
+| `kmhfl_code` | `CharField(20)`, null, unique | Kenya Master Health Facility List code |
 | `county` | `TextChoices` | The 47 counties |
 | `status` | `TextChoices` | `onboarding`, `active`, `suspended`, `withdrawn` |
 | `registered_at` | `DateTimeField`, null | Set when status first becomes `active` |
 
-- **"Registered facility"** (ADR 0004 4b) means `status = active`.
-- **Constraints:** `CheckConstraint`: `registered_at` is set when the status is `active`.
+- **Constraints:** `registered_at` is set when the status is `active`.
 - **Indexes:** `status`.
 
 ### 3.2 CareTeam (`apps/facilities`)
 
 **Purpose:** a named team within a facility (e.g. "SCD Clinic", "Emergency Department").
-It is the **consent grantee** (ADR 0005; Q-C1 and Q-M1 decided).
-**Implements:** ADR 0005, 0007; PRD §12.2.3. **Uses:** P T A S.
+Consent makes a care team **eligible** (ADR 0005).
+**Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -210,159 +202,158 @@ It is the **consent grantee** (ADR 0005; Q-C1 and Q-M1 decided).
 | `is_active` | `BooleanField` | |
 
 - **Constraints:** unique `(facility, name)` among live rows.
-- **Access rule:** consent covers only users with an **active `CareTeamMembership`** in the
-  grantee team. Pilot ED staff are not in the SCD Clinic team, so they need break-glass
-  (ADR 0004 4b) unless the patient grants consent to the ED team.
 
 ### 3.3 Staff: Cadre, StaffProfile, FacilityMembership, CareTeamMembership, VerificationPermission (`apps/staff`)
 
 #### Cadre
 
-**Purpose:** a professional cadre. It is **reference data, not code**, so verification rules
-can be configured (ADR 0001).
 **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
-| `code` | `SlugField`, unique | e.g. `medical_officer`, `consultant`, `clinical_officer`, `nurse`, `lab_technologist` |
+| `code` | `SlugField`, unique | |
 | `name` | `CharField(100)` | |
-| `regulator` | `TextChoices` | `KMPDC`, `COC`, `NCK`, `KMLTTB`, `none` |
-| `is_clinician` | `BooleanField` | Whether the cadre may invoke break-glass (ADR 0004 4b). The value for each cadre is **open** (Q-E1) |
+| `regulator` | `TextChoices` | `KMPDC`, `COC`, `NCK`, `KMLTTB`, `PPB`, `none` |
+| `may_break_glass` | `BooleanField` | ADR 0004 4b |
+
+**Seed** (*provisional, awaiting clinical-lead sign-off*):
+
+| `code` | Name | Regulator | `may_break_glass` |
+|---|---|---|---|
+| `medical_officer` | Medical officer | KMPDC | **yes** |
+| `clinical_officer` | Clinical officer | COC | **yes** |
+| `nurse` | Nurse | NCK | no |
+| `lab_technologist` | Laboratory technologist | KMLTTB | no |
+| `pharmacist` | Pharmacist | PPB | no |
+
+The team's answers do not mention consultants or specialists (Q-V6).
 
 #### StaffProfile
 
-**Purpose:** the professional identity of a staff `User`.
 **Implements:** PRD §7.2, §11.2, §11.2.1. **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
 | `user` | OneToOne `accounts.User`, `PROTECT` | |
-| `professional_id` | `CharField(12)`, unique | Continuum Professional ID, generated, immutable. Format TBC (PRD §7.2) |
+| `professional_id` | `CharField(12)`, unique | Continuum Professional ID, generated, immutable |
 | `full_name` | `CharField(200)` | |
-| `work_phone` | `CharField(16)`, blank | Shown as the "usual clinician" contact (§3.8) |
+| `work_phone` | `CharField(16)`, blank | Shown as the "usual clinician" contact |
 | `cadre` | FK Cadre, `PROTECT` | |
-| `registration_number` | `CharField(50)`, blank | Licence number with the regulator |
-| `registration_expires_on` | `DateField`, null | PRD §11.2.1: access is suspended on expiry |
+| `registration_number` | `CharField(50)`, blank | |
+| `registration_expires_on` | `DateField`, null | PRD §11.2.1 |
 | `registration_verified_at` / `_by` | `DateTimeField` / FK User, `PROTECT`, null | |
 | `status` | `TextChoices` | `pending`, `active`, `suspended`, `deactivated` |
 
 #### FacilityMembership
 
-**Purpose:** verified affiliation with a facility; there can be more than one (PRD
-§11.2.1, §11.3).
 **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
 | `staff` | FK StaffProfile, `PROTECT` | |
 | `facility` | FK Facility, `PROTECT` | |
-| `role` | `TextChoices` | `clinical`, `facility_admin` |
-| `starts_on` / `ends_on` | `DateField` / `DateField`, null | When a professional leaves, the membership is ended, not deleted |
+| `role` | `TextChoices` | `clinical`, `facility_admin` (no clinical access, PRD §12.3) |
+| `starts_on` / `ends_on` | `DateField` / `DateField`, null | Ended, never deleted |
 | `verified_by` / `verified_at` | FK User, `PROTECT` / `DateTimeField` | |
 
-- **Constraints:** one open membership per `(staff, facility, role)` (partial unique where
-  `ends_on IS NULL` and the row is live); `ends_on >= starts_on`.
-- **Rule:** a `facility_admin` membership grants **no** clinical access (PRD §12.3).
+- **Constraints:** one open membership per `(staff, facility, role)`; `ends_on >= starts_on`.
 
 #### CareTeamMembership
 
-**Purpose:** puts a facility member in a care team.
 **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
 | `membership` | FK FacilityMembership, `PROTECT` | |
-| `care_team` | FK CareTeam, `PROTECT` | Same facility as the membership (enforced by a trigger, M4) |
+| `care_team` | FK CareTeam, `PROTECT` | Same facility (trigger) |
 | `starts_on` / `ends_on` | dates | |
-
-- **Constraints:** one open row per `(membership, care_team)`.
 
 #### VerificationPermission
 
-**Purpose:** which cadre may verify which category of information.
 **Implements:** ADR 0001. **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
 | `cadre` | FK Cadre, `PROTECT` | |
-| `category` | `TextChoices` `ItemCategory` | `scd_dataset`, `allergy`, `complication`, `medication`, `genotype_test`, `transfusion_alert`, `emergency_care_plan` (`lab_result` is added when lab results are modelled) |
-| `approved_by` / `approved_on` | FK User / date | The clinical governance sign-off |
+| `category` | `TextChoices` `ItemCategory` | `clinical`, `lab_value`, `allergy`, `complication`, `medication`, `transfusion`, `admission`, `care_plan` |
+| `is_enabled` | `BooleanField` | Lets a rule be switched off for the pilot without deleting it |
+| `approved_by` / `approved_on` | FK User / date | |
 
 - **Constraints:** unique `(cadre, category)` among live rows.
-- **Ships empty.** Pilot rules come as a reviewed data migration after the clinical lead
-  signs them off.
+
+**Seed** (*provisional, awaiting clinical-lead sign-off*). These are written as a data
+migration; in production they are enabled only after sign-off.
+
+| Cadre | Categories |
+|---|---|
+| Medical officer | all |
+| Clinical officer | all |
+| Lab technologist | `lab_value` (blood group and Rh, baseline Hb, other lab values), **`is_enabled` may be off in the pilot** |
+| Nurse | `allergy` only |
+| Pharmacist | none |
+
+Which category each element or model belongs to is in §3.6 and §3.8.
 
 ### 3.4 Patient, PatientIdentifier, EmergencyContact (`apps/patients`)
 
 #### Patient
 
-**Purpose:** a person with SCD enrolled in Continuum. Not owned by any facility.
 **Implements:** PRD §7.1, §7.2, §11.1, §11.1.3; ADR 0003, 0006, 0007. **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
-| `continuum_id` | `CharField(12)`, unique | System-generated, immutable, never reassigned (PRD §11.1). `CH-XXXXXX`, with no O/0 or I/1 and a check character (proposal) |
+| `continuum_id` | `CharField(12)`, unique | Generated, immutable, never reassigned. `CH-XXXXXX` with no O/0 or I/1 and a check character (proposal). Sent to the patient by SMS at enrolment (§3.14) |
 | `given_name`, `middle_names`, `family_name` | `CharField` | |
-| `date_of_birth` | `DateField` | Age is computed, never stored |
+| `date_of_birth` | `DateField` | Age is computed |
 | `dob_is_estimated` | `BooleanField` | |
-| `sex` | `TextChoices`, **required** | `female`, `male`, `intersex`. Used for matching (ADR 0003) and clinical care. **Decided (D5)** |
-| `gender` | `CharField(50)`, blank | **Optional**, self-described. **Decided (D5)**; PRD change PC-5 |
+| `sex` | `TextChoices`, **required** | `female`, `male`, `intersex`. Used for matching and clinical care. **There is no gender field (decided 19 Nov; PC-5)** |
 | `place_of_birth` | `CharField`, blank | |
 | `county_of_residence`, `residence_detail` | `TextChoices` / `CharField`, blank | |
-| `citizenship` | `CharField(2)`, blank | ISO 3166 code |
+| `citizenship` | `CharField(2)`, blank | ISO 3166 |
 | `preferred_language` | `TextChoices` | `en`, `sw`, `other` |
-| `account_status` | `TextChoices` | `pending_identity`, `identity_verified`, `suspended`, `deactivated` (PRD §11.1.3) |
-| `identity_verified_at` / `_by` | `DateTimeField` / FK User, `PROTECT`, null | Identity verification, separate from clinical verification (PRD §11.1.1) |
+| `account_status` | `TextChoices` | `pending_identity`, `identity_verified`, `suspended`, `deactivated` |
+| `identity_verified_at` / `_by` | `DateTimeField` / FK User, `PROTECT`, null | |
 | `is_deceased`, `date_of_death` | `BooleanField`, `DateField` null | |
 | `adult_transition_at` | `DateTimeField`, null | ADR 0006 |
 
-- **Not stored:** the whole-record clinical status (PRD §11.1.3) is derived (ADR 0001).
 - **Constraints:**
   - `identity_verified_at` is set when `account_status = identity_verified`.
   - `date_of_death` is null unless `is_deceased`.
   - `sex` is never blank.
-- **Indexes:**
-  - `(family_name, date_of_birth)`.
-  - **`pg_trgm` GIN trigram indexes** on `given_name` and `family_name` for fuzzy name
-    search (M5, accepted). The extension is created with Django's `TrigramExtension()`
-    migration operation, which needs a database role allowed to create extensions (Q-T1).
+- **Indexes:** `(family_name, date_of_birth)`; `pg_trgm` GIN indexes on `given_name` and
+  `family_name` (M5, accepted). The extension is created by Django's `TrigramExtension()`
+  migration operation (Q-T1).
 
 #### PatientIdentifier
 
-**Purpose:** every external or system identifier, one per row (ADR 0003).
 **Implements:** ADR 0003; PRD §7.1, §10.4, §12.2. **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
 | `patient` | FK Patient, `PROTECT` | |
-| `id_type` | `TextChoices` | `client_registry`, `national_id`, `birth_certificate`, `sha_number`, `phone`, `continuum_id`, `facility_mrn` (hospital patient number) |
-| `value` | `CharField(64)` | Normalised: phone in E.164 (`+2547…`), IDs uppercased with spaces and hyphens removed |
-| `issuing_facility` | FK Facility, `PROTECT`, null | Required only for `facility_mrn` |
-| `verification_method` | `TextChoices` | `unverified`, `self_declared`, `document_sighted`, `document_uploaded`, `otp_confirmed`, `registry_lookup` (future; not used in the pilot) |
+| `id_type` | `TextChoices` | `client_registry`, `national_id`, `birth_certificate`, `sha_number`, `phone`, `continuum_id`, `facility_mrn` |
+| `value` | `CharField(64)` | Normalised (phone in E.164; IDs uppercased, separators removed) |
+| `issuing_facility` | FK Facility, `PROTECT`, null | `facility_mrn` only |
+| `verification_method` | `TextChoices` | `unverified`, `self_declared`, `document_sighted`, `document_uploaded`, `otp_confirmed`, `registry_lookup` (future) |
 | `verified_at` / `verified_by` | `DateTimeField` / FK User, `PROTECT`, null | |
-| `is_primary` | `BooleanField` | e.g. the primary phone for SMS |
+| `is_primary` | `BooleanField` | The primary phone receives OTPs and SMS |
 
-- **Strong types:** `client_registry`, `national_id`, `birth_certificate`, `sha_number`,
-  `continuum_id` and `facility_mrn`. `phone` is **not strong** (Q-I1).
+- **Strong types:** all except `phone` (Q-I1).
 - **Constraints:**
   - Unique `(id_type, value)` among live rows for strong types except `facility_mrn`.
   - Unique `(issuing_facility, value)` for `facility_mrn`.
-  - `issuing_facility` is set if and only if `id_type = facility_mrn`.
-  - `verified_at` is set for methods other than `unverified` and `self_declared`.
+  - `issuing_facility` is set if and only if the type is `facility_mrn`.
+  - `verified_at` is set for document, OTP and registry methods.
   - One live `is_primary` per `(patient, id_type)`.
 - **Indexes:** `(id_type, value)`.
-- **Continuum ID:** canonical on `Patient.continuum_id`, mirrored here as one immutable row
-  created in the same transaction (Q-I3).
-- **Matching** (ADR 0003, in a selector):
+- **Matching** (ADR 0003):
   - **confirmed:** a strong identifier agrees, plus the name or DOB agrees.
-  - **probable:** given + family name + DOB + **sex** agree, with no strong identifier;
-    shown with a warning.
+  - **probable:** names + DOB + **sex** agree, with no strong identifier; shown with a
+    warning.
 
 #### EmergencyContact
 
-**Purpose:** people to contact in an emergency. The dataset requires at least one, or an
-explicit `none` / `unknown` (§3.6).
-**Uses:** P T A S.
+**Uses:** P T A S. Required by the dataset (§3.6). Not searchable. Not verified (Q-V5).
 
 | Field | Type | Notes |
 |---|---|---|
@@ -371,18 +362,16 @@ explicit `none` / `unknown` (§3.6).
 | `phone` | `CharField(16)` | E.164 |
 | `priority` | `PositiveSmallIntegerField` | |
 
-- **Not searchable** (prd-review Q15 open).
-
 ### 3.5 GuardianRelationship (`apps/patients`)
 
-**Purpose:** a parent or legal guardian managing a minor's record (ADR 0006).
-**Implements:** ADR 0006; PRD §8.8.1.4, §10.1. **Uses:** P T A S.
+**Implements:** ADR 0006 (the pilot enrols adults **and children**, *provisional*); PRD
+§8.8.1.4, §10.1. **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
 | `patient` | FK Patient, `PROTECT` | The minor |
 | `guardian_name` | `CharField(200)` | |
-| `guardian_phone` | `CharField(16)` | For SMS, including break-glass notifications |
+| `guardian_phone` | `CharField(16)` | Receives OTPs and SMS for a minor (Q-G3) |
 | `guardian_id_type` / `guardian_id_value` | `TextChoices` / `CharField`, blank | |
 | `relationship` | `TextChoices` | `mother`, `father`, `legal_guardian`, `other_relative`, `other` |
 | `legal_basis` | `TextChoices` | `parent`, `court_order`, `other_documented` |
@@ -391,26 +380,22 @@ explicit `none` / `unknown` (§3.6).
 | `end_reason` | `TextChoices`, blank | `patient_reached_majority`, `revoked`, `guardian_changed`, `deceased` |
 
 - **Constraints:** `end_reason` is set if and only if `ends_on` is set; `ends_on >= starts_on`.
-- **Transition:** a service ends open relationships with `patient_reached_majority` and sets
-  `Patient.adult_transition_at`. A daily task lists patients turning 18 within 90 days; it
-  never ends access by itself.
+- **Transition:** a service ends open relationships at 18 and sets
+  `Patient.adult_transition_at`. A daily task lists patients turning 18 within 90 days.
 
 ### 3.6 SCD core dataset (`apps/clinical`)
 
-**Implements:** ADR 0002 (**agreed list; awaiting clinical-lead sign-off**), ADR 0001; PRD
-§8.3, §14.5, §15.4. **Design:** M2, accepted with guard rails:
-1. **Typed value columns** only: `code`, `decimal`, `date`, `boolean`.
-2. An **element-definition reference table** (`DatasetElement`) holding each element's data
-   type.
-3. A **`CHECK`** that exactly one value column **or** a null reason is set.
+**Implements:** ADR 0002, ADR 0001; PRD §8.3, §14.5, §15.4. **Design (M2, accepted)** with
+these guard rails:
+1. **Typed value columns:** `code`, `decimal`, `integer` (counts), `date`, `boolean`. The
+   `integer` column was added 19 Nov for counts.
+2. An **element-definition table** (`DatasetElement`) holding each element's data type.
+3. A **`CHECK`**: exactly one value column **or** a null reason is set.
 4. A **partial unique index**: one current row per patient + element.
-5. A **PostgreSQL view** that pivots to one row per patient for reporting.
+5. A **PostgreSQL view**: one row per patient, for reporting.
 
-Elements that need more structure than one typed value (allergies, complications, other
-medicines, genotype test details, transfusion reactions/antibodies, usual facility and
-clinician, emergency contacts, pain management) have `data_type = linked`. Their entries
-live in a dedicated model (§3.8, §3.9, §3.4). The `CoreDatasetItem` row for a linked element
-exists **only** to record an explicit `none` or `unknown` when there are no entries.
+Elements with structure are `linked`: their entries live in a dedicated model, and the
+`CoreDatasetItem` row only records `none` / `unknown` when there are no entries.
 
 #### CodeSystem and Code
 
@@ -419,95 +404,105 @@ exists **only** to record an explicit `none` or `unknown` when there are no entr
 | Model | Fields |
 |---|---|
 | `CodeSystem` | `key` (`SlugField`, unique), `name` |
-| `Code` | `system` FK CodeSystem `PROTECT`; `code` (`SlugField`); `label`; `sort_order`; `is_active`; `external_ref` (blank, e.g. an ICD-11 code for future mapping) |
+| `Code` | `system` FK `PROTECT`, `code` (`SlugField`), `label`, `sort_order`, `is_active`, `external_ref` (blank) |
 
-- **Constraints:** unique `(system, code)`.
-- **Retiring a code:** `is_active=False`; codes are never deleted.
+- **Constraints:** unique `(system, code)`. Codes are retired with `is_active=False` and
+  never deleted.
 
-**Seeded code systems** (agreed list):
+**Seeded code systems** (*provisional, awaiting clinical-lead sign-off*):
 
 | `CodeSystem.key` | Codes |
 |---|---|
-| `scd_genotype` | `hbss` HbSS · `hbsc` HbSC · `hbs_beta0` HbSβ⁰ · `hbs_beta_plus` HbSβ⁺ · `other` Other |
-| `blood_group` | `a_pos`, `a_neg`, `b_pos`, `b_neg`, `ab_pos`, `ab_neg`, `o_pos`, `o_neg` (ABO + Rh as one value) |
-| `genotype_test_method` | `hplc`, `electrophoresis`, `isoelectric_focusing`, `point_of_care`, `newborn_screen`, `molecular`, `other` (proposed; not in the agreed list) |
-| `complication` | `stroke` Stroke · `acute_chest_syndrome` Acute chest syndrome · `splenic_sequestration` Splenic sequestration · `avascular_necrosis` Avascular necrosis · `other` Other (with a description) |
+| `scd_genotype` | `hbss` HbSS · `hbsc` HbSC · `hbs_beta0` HbSβ⁰ · `hbs_beta_plus` HbSβ⁺ · `other` |
+| `blood_group` | `a_pos` `a_neg` `b_pos` `b_neg` `ab_pos` `ab_neg` `o_pos` `o_neg` |
+| `genotype_test_method` | `hb_electrophoresis` Hb electrophoresis · `hplc` HPLC · `isoelectric_focusing` Isoelectric focusing · `point_of_care` Point-of-care rapid test · `dna_genetic` DNA / genetic · `newborn_screening` Newborn screening · `sickling_solubility` Sickling / solubility screen · `other` |
+| `complication` | `stroke` · `acute_chest_syndrome` · `splenic_sequestration` · `avascular_necrosis` · `other` (with a description) |
+| `admission_reason` | *Proposed (Q-D6):* `vaso_occlusive_crisis` · `acute_chest_syndrome` · `fever_infection` · `severe_anaemia` · `stroke` · `splenic_sequestration` · `priapism` · `other` |
 
-"Unknown" genotype or blood group is recorded as `null_reason = unknown`, not as a code,
-so "unknown" means the same thing for every element. The agreed list's "unknown" genotype
-is preserved this way.
+"Unknown" (genotype, blood group, …) is always `null_reason = unknown`, never a code.
+"None" for complications or other medicines is `null_reason = none`.
 
 #### DatasetElement
 
-**Purpose:** the element-definition reference table.
 **Uses:** P T A S.
 
 | Field | Type | Notes |
 |---|---|---|
 | `key` | `SlugField`, unique | |
 | `label` | `CharField` | |
-| `data_type` | `TextChoices` | `code`, `decimal`, `date`, `boolean`, `linked` |
-| `linked_model` | `CharField`, blank | For `linked`: the app label of the model holding entries, e.g. `clinical.Allergy` |
-| `code_system` | FK CodeSystem, `PROTECT`, null | Required if and only if `data_type = code` |
-| `unit` | `CharField(20)`, blank | e.g. `g/dL` |
-| `decimal_places` | `PositiveSmallIntegerField`, null | `0` makes a decimal element a whole-number count |
-| `min_value` / `max_value` | `DecimalField`, null | Plausibility range |
+| `data_type` | `TextChoices` | `code`, `decimal`, `integer`, `date`, `boolean`, `linked` |
+| `linked_model` | `CharField`, blank | e.g. `clinical.Allergy` |
+| `code_system` | FK CodeSystem, `PROTECT`, null | |
+| `unit` | `CharField(20)`, blank | e.g. `g/dL`, `mg/day` |
+| `min_value` / `max_value` | `DecimalField`, null | For `decimal` and `integer` |
 | `requirement` | `TextChoices` | `required`, `optional`, `conditional` |
-| `required_if_element` / `required_if_boolean` | FK self, `PROTECT`, null / `BooleanField`, null | For `conditional`: e.g. the hydroxyurea dose is required when `hydroxyurea = yes` |
-| `in_emergency_summary` | `BooleanField` | Drives the summary (ADR 0004 4a) |
+| `required_if_element` | FK self, `PROTECT`, null | For `conditional` |
+| `required_if_rule` | `TextChoices`, blank | `is_true`, `greater_than_zero` |
+| `verification_category` | `TextChoices` `ItemCategory`, null | Which `VerificationPermission` category applies; null = not verified |
+| `in_emergency_summary` | `BooleanField` | |
 | `sort_order` | `PositiveSmallIntegerField` | |
 | `is_active` | `BooleanField` | |
 
 - **Constraints:**
-  - `code_system` is set if and only if `data_type = code`.
-  - `linked_model` is set if and only if `data_type = linked`.
-  - Both `required_if_*` fields are set if and only if `requirement = conditional`.
-  - `decimal_places`, `min_value` and `max_value` are set only for `decimal`.
+  - `code_system` is set if and only if the type is `code`.
+  - `linked_model` is set if and only if the type is `linked`.
+  - Both `required_if_*` fields are set if and only if the requirement is `conditional`.
+  - The min/max values are set only for numeric types.
 
-**Agreed element list.** ⚠ **Awaiting clinical-lead sign-off.** Every element accepts
-`none` or `unknown` (ADR 0002).
+**Element list.** *Provisional, awaiting clinical-lead sign-off* (team answers of 19 Nov).
+Every element accepts `none` or `unknown`.
 
 *Required:*
 
-| Key | Label | Data type | Stored in | Req | Summary* |
+| Key | Label | Type | Req | Verify category | Summary |
 |---|---|---|---|---|---|
-| `scd_confirmed` | SCD confirmed | boolean | CoreDatasetItem | required | yes |
-| `scd_genotype` | Genotype | code (`scd_genotype`) | CoreDatasetItem | required | yes |
-| `blood_group` | Blood group and Rh | code (`blood_group`) | CoreDatasetItem | required | yes |
-| `baseline_hb` | Baseline haemoglobin (g/dL; `observed_on` = date measured) | decimal (1 dp, 2.0–20.0) | CoreDatasetItem | required | yes |
-| `hydroxyurea` | On hydroxyurea | boolean | CoreDatasetItem | required | yes |
-| `hydroxyurea_dose` | Hydroxyurea dose (unit: Q-D1) | decimal | CoreDatasetItem | conditional (`hydroxyurea = yes`) | yes |
-| `hydroxyurea_start` | Hydroxyurea start date | date | CoreDatasetItem | conditional (`hydroxyurea = yes`) | no |
-| `folic_acid` | On folic acid | boolean | CoreDatasetItem | required | yes |
-| `allergies` | Allergies | linked → `Allergy` | Allergy (none / unknown in CoreDatasetItem) | required | yes |
-| `hospitalisations_12m` | Hospitalisations in the last 12 months | decimal (0 dp, 0–99) | CoreDatasetItem | required | yes |
-| `usual_care` | Usual facility and clinician | linked → `UsualCareProvider` | UsualCareProvider | required | yes |
-| `emergency_contact` | Emergency contact | linked → `EmergencyContact` | EmergencyContact | required | yes |
+| `scd_confirmed` | SCD confirmed | boolean | required | clinical | ✓ |
+| `scd_genotype` | Genotype | code | required ⚑1 | clinical ⚑5 | ✓ |
+| `blood_group` | Blood group and Rh | code | required | lab_value | ✓ |
+| `baseline_hb` | Baseline haemoglobin (g/dL, 2.0–20.0; `observed_on` = date) | decimal | required | lab_value | — |
+| `transfusion_count` | Number of transfusions ⚑2 | integer (0–999) | required | transfusion | — |
+| `last_transfusion` | Date of last transfusion | date | conditional (`transfusion_count` > 0) | transfusion | — |
+| `transfusion_alerts` | Transfusion reactions or antibodies | linked → `TransfusionAlert` | required | transfusion | ✓ |
+| `hydroxyurea` | On hydroxyurea | boolean | required | medication | ✓ |
+| `hydroxyurea_dose` | Hydroxyurea dose (**mg/day**) | integer (0–4000) | conditional (`hydroxyurea` true) | medication | ✓ |
+| `hydroxyurea_start` | Hydroxyurea start date | date | conditional (`hydroxyurea` true) | medication | — |
+| `folic_acid` | On folic acid | boolean | required | medication | ✓ ⚑3 |
+| `allergies` | Allergies | linked → `Allergy` | required | allergy | ✓ |
+| `hospitalisations_12m` | Hospitalisations in the last 12 months (**any ward admission**), stated at enrolment | integer (0–99) | required | clinical | — |
+| `pain_management` | Pain management that usually works / things to avoid | linked → `EmergencyCarePlan` | required | care_plan | ✓ |
+| `usual_care` | Usual facility and clinician | linked → `UsualCareProvider` | required | (not verified) | ✓ (facility) |
+| `emergency_contact` | Emergency contact | linked → `EmergencyContact` | required | (not verified) | ✓ |
 
 *Optional:*
 
-| Key | Label | Data type | Stored in | Req | Summary* |
+| Key | Label | Type | Req | Verify category | Summary |
 |---|---|---|---|---|---|
-| `genotype_test` | Genotype test method, date and facility | linked → `GenotypeTest` | GenotypeTest | optional | no |
-| `transfusion_count` | Number of transfusions (lifetime) | decimal (0 dp, 0–999) | CoreDatasetItem | optional | yes |
-| `last_transfusion` | Date of last transfusion | date | CoreDatasetItem | optional | yes |
-| `transfusion_alerts` | Transfusion reactions or red-cell antibodies | linked → `TransfusionAlert` | TransfusionAlert | optional | yes |
-| `penicillin_prophylaxis` | On penicillin prophylaxis | boolean | CoreDatasetItem | optional | no |
-| `other_medicines` | Other current medicines | linked → `Medication` | Medication | optional | yes |
-| `complications` | Major complications (fixed list) | linked → `PatientComplication` | PatientComplication | optional | yes |
-| `pain_management` | Pain management that usually works / things to avoid | linked → `EmergencyCarePlan` | EmergencyCarePlan (pain fields) | optional | yes |
+| `genotype_test` | Test method, date and facility | linked → `GenotypeTest` | optional | lab_value | — |
+| `penicillin_prophylaxis` | Penicillin prophylaxis | boolean | optional | medication | ✓ ⚑3 |
+| `other_medicines` | Other medicines (none or list) | linked → `Medication` | optional | medication | ✓ |
+| `complications` | Complications (fixed list + none + other) | linked → `PatientComplication` | optional | complication | — ⚑4 |
 
-\* The "Summary" column (shown in the emergency summary) is a **proposal** for the clinical
-lead; the agreed list did not specify it.
+Flags for the clinical lead:
+- **⚑1** The team said genotype is *Optional*; it is kept *Required* (with `unknown`
+  allowed), on JK's instruction.
+- **⚑2** The meaning of "number of transfusions" is unclear: lifetime episodes, units, or
+  the last 12 months?
+- **⚑3** The emergency summary lists "current medicines incl. hydroxyurea". Folic acid and
+  penicillin prophylaxis are read as current medicines and shown when "yes".
+- **⚑4** Complications and baseline Hb are **not** in the provisional summary list.
+  Intended?
+- **⚑5** Is genotype a lab value, so that a lab technologist may confirm it, or clinical?
+  Also, a **sickling/solubility screen cannot establish the genotype** (it doesn't
+  separate HbAS from HbSS). Should a genotype supported only by that method be blocked from
+  verification?
 
-**§15.4 completeness** = required elements, plus conditional elements whose condition is
-met, that have a current value, a current linked entry, or a `null_reason`; divided by the
-number of applicable elements. It is computed from the reporting view.
+**Completeness (§15.4):** applicable elements are the required ones, plus conditional ones
+whose condition holds. An element counts as complete when it has a current value, a current
+linked entry, or a `null_reason`. Completeness is computed from the reporting view.
 
 #### CoreDatasetItem
 
-**Purpose:** one patient's current (and past) value for one element.
-**Uses:** C (= P T A S + V + provenance).
+**Uses:** C.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -515,163 +510,138 @@ number of applicable elements. It is computed from the reporting view.
 | `element` | FK DatasetElement, `PROTECT` | |
 | `value_code` | FK Code, `PROTECT`, null | |
 | `value_decimal` | `DecimalField(7,2)`, null | |
+| `value_integer` | `IntegerField`, null | Counts and doses (added 19 Nov) |
 | `value_date` | `DateField`, null | |
 | `value_boolean` | `BooleanField`, null | |
 | `null_reason` | `TextChoices`, blank | `none`, `unknown` |
-| `observed_on` | `DateField`, null | When the value was true or measured (e.g. the baseline Hb date). Metadata, not a value column |
+| `observed_on` | `DateField`, null | Metadata, not a value column |
 
-Constraints (guard rails):
-1. **`CHECK` exactly one:** either exactly one of `value_code`, `value_decimal`,
-   `value_date`, `value_boolean` is set and `null_reason` is blank, or all four are null and
-   `null_reason` is `none` or `unknown`. In SQL:
-   `num_nonnulls(value_code_id, value_decimal, value_date, value_boolean) + (null_reason <> '')::int = 1`.
+Constraints:
+1. **`CHECK` exactly one:**
+   `num_nonnulls(value_code_id, value_decimal, value_integer, value_date, value_boolean) + (null_reason <> '')::int = 1`.
 2. **Partial unique index:** `(patient, element)` where `is_current AND deleted_at IS NULL`.
-3. **Trigger `clinical_dataset_item_type_check`** (M4):
-   - The value column set must match `element.data_type`.
-   - `value_code` must belong to `element.code_system`.
-   - A decimal must respect `decimal_places` and the min/max range.
+3. **Trigger `clinical_dataset_item_type_check`:**
+   - The value column must match `element.data_type`.
+   - A code must come from the element's code system.
+   - A numeric value must be within min/max.
    - A `linked` element accepts only a `null_reason`.
 
-   A `CHECK` can't do these because they need to read `DatasetElement`. Tests cover each
-   rejection.
+   Tested.
 
 **Indexes:** `(patient, is_current)`, `(element, is_current)`.
 
-**Linked elements:** adding the first entry (e.g. an `Allergy`) supersedes a `none` /
-`unknown` row for that element in the same transaction (service rule).
-
 #### Reporting view `clinical_scd_dataset_wide`
 
-**Purpose:** one row per live patient, one group of columns per active element, for
-reporting and §15.4 completeness. **Not used by the clinical UI**, which goes through
-selectors with access checks.
-
-- **Created by a `RunSQL` migration.** The SQL is generated from the active elements by a
-  function in `apps/clinical/reporting.py`, with conditional aggregation over current, live
-  `CoreDatasetItem`s (`max(...) FILTER (WHERE element_key = 'baseline_hb')`).
-- **Columns per scalar element:** `<key>` (the value; codes as their `code` slug),
-  `<key>_status` (`value` / `none` / `unknown` / `missing`) and `<key>_verification`.
-- **Columns per linked element:** `<key>_count` and `<key>_status`.
-- **Identifies patients by `public_id` only:** no names, identifiers or contact details
-  (data minimisation).
-- **When elements change,** the data migration that changes them must also
-  `DROP VIEW` / `CREATE VIEW`. A test asserts that the view's columns match the active
-  elements, so a forgotten rebuild fails CI.
-- **Optional:** an unmanaged model (`managed = False`) for ORM reads in reports.
-- **Who may read it:** reporting roles only (Q-R1).
+- **Shape:** one row per live patient, keyed by `public_id` only (no names, identifiers or
+  contacts).
+- **Columns:** per scalar element, `<key>`, `<key>_status` (`value` / `none` / `unknown` /
+  `missing`) and `<key>_verification`; per linked element, `<key>_count` and
+  `<key>_status`.
+- **Generated SQL:** the view's SQL is generated from the active elements by
+  `apps/clinical/reporting.py` and created by `RunSQL`. Any data migration that changes
+  elements recreates it, and a test asserts that the columns match the active elements.
+- **Who reads it:** reporting only (Q-R1); the clinical UI never uses it.
 
 ### 3.7 Verification: VerifiableMixin, ClinicalItem, VerificationEvent (`apps/clinical`)
 
-**Implements:** ADR 0001 (as amended 18 Nov 2026); PRD §7.4, §7.8, §7.10, §11.5.1, §13.1.3.
+**Implements:** ADR 0001; PRD §7.4, §7.8, §7.10, §11.5.1, §13.1.3.
 
-#### `VerifiableMixin` (abstract)
-
-| Field | Type | Notes |
-|---|---|---|
-| `verification_status` | `TextChoices` | **`unverified`**, `clinician_verified`, `disputed`, `retracted` |
-| `verified_by` | FK User, `PROTECT`, null | |
-| `verified_at` | `DateTimeField`, null | |
-| `verified_at_facility` | FK Facility, `PROTECT`, null | |
-
-- **Constraint (on each concrete model):** `verified_by` and `verified_at` are set when the
-  status is `clinician_verified`.
-
-#### `ClinicalItem` (abstract) = ContinuumModel + VerifiableMixin + provenance
+#### `VerifiableMixin`
 
 | Field | Type | Notes |
 |---|---|---|
-| `source` | `TextChoices`, required | **`patient`**, **`clinician`**, **`import`**: where the information came from (Q-V1, decided). A guardian's entry is `patient`; `created_by` records who typed it |
-| `source_facility` | FK Facility, `PROTECT`, null | Required when `source` is `clinician` (`CHECK`) |
-| `recorded_by_cadre` | FK Cadre, `PROTECT`, null | Cadre at the time of entry (PRD §11.5.1) |
+| `verification_status` | `TextChoices` | `unverified`, `clinician_verified`, `disputed`, `retracted` |
+| `verified_by` / `verified_at` / `verified_at_facility` | FK User `PROTECT` / `DateTimeField` / FK Facility `PROTECT`, all null | Set when `clinician_verified` (`CHECK`) |
+
+#### `ClinicalItem` = ContinuumModel + VerifiableMixin + provenance
+
+| Field | Type | Notes |
+|---|---|---|
+| `source` | `TextChoices`, required | `patient`, `clinician`, `import`. A guardian's entry is `patient` |
+| `source_facility` | FK Facility, `PROTECT`, null | Required when the source is `clinician` |
+| `recorded_by_cadre` | FK Cadre, `PROTECT`, null | |
 | `is_current` | `BooleanField` | |
-| `supersedes` | OneToOne self, `PROTECT`, null | The previous version (M3) |
+| `supersedes` | OneToOne self, `PROTECT`, null | M3 |
 
-- **Display:** "Unverified — reported by patient" vs "Unverified — entered by clinician"
-  vs "Verified by <cadre>, <facility>, <date>". This covers PRD §7.4's "patient-reported"
-  and "clinician-documented".
+Each concrete model declares its `ItemCategory`; for `CoreDatasetItem` it comes from the
+element.
 
 #### VerificationEvent
 
-**Purpose:** append-only history of every status change.
 **Uses:** L.
 
 | Field | Type | Notes |
 |---|---|---|
-| `content_type` / `object_id` | FK ContentType, `PROTECT` / `PositiveBigIntegerField` | The item (several models) |
-| `patient` | FK Patient, `PROTECT` | Copied onto the row, so a patient's events can be queried directly |
+| `content_type` / `object_id` | FK ContentType `PROTECT` / `PositiveBigIntegerField` | |
+| `patient` | FK Patient, `PROTECT` | |
 | `from_status` / `to_status` | `TextChoices` | |
-| `actor` | FK User, `PROTECT` | |
-| `actor_cadre` | FK Cadre, `PROTECT` | |
-| `facility` | FK Facility, `PROTECT`, null | |
+| `actor` / `actor_cadre` / `facility` | FK User / FK Cadre / FK Facility (null), `PROTECT` | |
 | `reason` | `TextField`, blank | Required for `disputed` and `retracted` |
 
-- **Indexes:** `(content_type, object_id)`, `(patient, created_at)`.
-- **Service rule:** a user may set `clinician_verified` only with a
-  `VerificationPermission` for their cadre and the item's category, while holding an active
-  clinical membership at the acting facility.
-- **Open:** whether a clinician who can verify an item's category may verify their own
-  entry (Q-V4).
+- **Service rule:** `clinician_verified` requires an **enabled** `VerificationPermission`
+  for the actor's cadre and the item's category, and an active clinical membership at the
+  acting facility.
 
 ### 3.8 Linked clinical entries (`apps/clinical`)
 
-**Implements:** ADR 0002 (agreed list); PRD §7.6, §8.3, §11.1.2. **Uses:** C, except
-`UsualCareProvider` (see below).
+**Uses:** C (except `UsualCareProvider`).
 
-| Model | Fields (besides ClinicalItem) | Constraints |
-|---|---|---|
-| `Allergy` | `patient`; `substance` (`CharField`); `category` (`drug`, `food`, `environmental`, `other`); `reaction` (text); `severity` (`mild`, `moderate`, `severe`, `unknown`) | — |
-| `PatientComplication` | `patient`; `complication` FK Code (`complication` system), `PROTECT`; `description` (required when the code is `other`); `onset_date` (null); `onset_precision` (`day`, `month`, `year`, `unknown`) | Code system checked by a trigger (M4); partial unique `(patient, complication)` where current and live, except `other` |
-| `Medication` | `patient`; `name`; `dose_text`; `frequency_text`; `route`; `started_on` / `stopped_on` (null) | `stopped_on >= started_on`. These are **other** current medicines: hydroxyurea and folic acid are dataset elements and are not repeated here (service check). Coded dosing is out of scope (PRD §16.10) |
-| `GenotypeTest` | `patient`; `method` FK Code (`genotype_test_method`); `tested_on` (null); `tested_on_precision`; `facility` FK Facility `PROTECT`, null; `facility_name_text` (for non-participating labs) | `facility` or `facility_name_text` (or neither, if unknown), never both |
-| `TransfusionAlert` | `patient`; `kind` (`reaction`, `alloantibody`); `description` (e.g. "anti-K"; "febrile reaction"); `identified_on` (null) | — |
-| `UsualCareProvider` | `patient`; `facility` FK Facility `PROTECT`, null; `facility_name_text`; `clinician` FK StaffProfile `PROTECT`, null; `clinician_name_text`; `clinician_phone` | One current per patient; `facility` or `facility_name_text` is set |
+| Model | Category | Fields (besides ClinicalItem) | Constraints |
+|---|---|---|---|
+| `Allergy` | allergy | `patient`; `substance`; `category` (`drug`, `food`, `environmental`, `other`); `reaction`; `severity` (`mild`, `moderate`, `severe`, `unknown`) | — |
+| `PatientComplication` | complication | `patient`; `complication` FK Code; `description` (required for `other`); `onset_date` (null); `onset_precision` | Code system (trigger); partial unique `(patient, complication)` except `other` |
+| `Medication` | medication | `patient`; `name`; `dose_text`; `frequency_text`; `route`; `started_on` / `stopped_on` | `stopped_on >= started_on`. "Other" medicines: hydroxyurea, folic acid and penicillin prophylaxis are elements and aren't repeated here |
+| `GenotypeTest` | lab_value | `patient`; `method` FK Code; `tested_on` (null); `tested_on_precision`; `facility` FK Facility (null); `facility_name_text` | Never both `facility` and `facility_name_text` |
+| `TransfusionAlert` | transfusion | `patient`; `kind` (`reaction`, `alloantibody`); `description`; `identified_on` (null) | — |
+| `Admission` | admission | `patient`; `admitted_on`; `discharged_on` (null); `facility` FK Facility (null) or `facility_name_text`; `reason` FK Code (`admission_reason`); `reason_detail` | `discharged_on >= admitted_on`; exactly one of `facility` / `facility_name_text`. **Proposed (Q-D6)** |
+| `UsualCareProvider` | — | `patient`; `facility` FK (null) or `facility_name_text`; `clinician` FK StaffProfile (null) or `clinician_name_text`; `clinician_phone` | One current per patient. **Uses P T A S + `source`, not verified** |
 
-**`UsualCareProvider` uses** P T A S + `source` + supersession, **without** verification.
-It is a care-coordination fact, not clinical information to verify (Q-V5). When
-`clinician` is set, the summary shows the clinician's `work_phone`, and the
-`clinician_phone` field is left blank.
-
-Hospitalisation details, treatment history and treatment responses (PRD §8.3) are **not**
-in the agreed dataset (D17). The count is the `hospitalisations_12m` element. Encounters
-(PRD §10.10) and lab results (§10.11) are later plans.
+**Q-D6, proposed resolution:**
+- `hospitalisations_12m` is the count **stated at enrolment**.
+- From enrolment on, **every new admission is recorded** as an `Admission` row, with
+  admission date, discharge date, facility and reason.
+- **Treatment history and treatment responses (PRD §8.3) are deferred to phase 2.**
 
 ### 3.9 EmergencyCarePlan (`apps/clinical`)
 
-**Purpose:** a clinician-authored plan for acute episodes, versioned. Its pain fields hold
-the dataset's `pain_management` element.
-**Implements:** PRD §7.6, §8.8.1.1, §10.6; ADR 0002, 0004 4a. **Uses:** C.
+**Purpose:** holds the required `pain_management` element and other acute-care guidance;
+versioned.
+**Category:** care_plan. **Uses:** C.
 
 | Field | Type | Notes |
 |---|---|---|
 | `patient` | FK Patient, `PROTECT` | |
-| `pain_relief_that_works` | `TextField`, blank | Dataset element `pain_management` |
-| `pain_relief_to_avoid` | `TextField`, blank | Dataset element `pain_management` |
-| `fluids_oxygen_guidance` | `TextField`, blank | |
-| `other_instructions` | `TextField`, blank | |
-| `review_due_on` | `DateField` | Interval TBC (PRD suggests 3–6 months). An overdue plan shows as "outdated" (PRD §10.6) |
+| `pain_relief_that_works` | `TextField`, blank | In the emergency summary |
+| `pain_relief_to_avoid` | `TextField`, blank | In the emergency summary |
+| `fluids_oxygen_guidance` / `other_instructions` | `TextField`, blank | Not in the provisional summary list (Q-D7) |
+| `review_due_on` | `DateField` | Overdue plans show as "outdated" (PRD §10.6) |
 | `last_reviewed_at` / `_by` | `DateTimeField` / FK User, null | |
 
-- **Constraints:**
-  - One current, live plan per patient.
-  - At least one text field is non-empty.
-- **Patient-reported pain information:** if a patient reports what works before any
-  clinician plan exists, it's stored as a plan with `source = patient`, `unverified`.
+- **Constraints:** one current, live plan per patient; at least one pain field is
+  non-empty.
 
-**Emergency summary (ADR 0004 4a).** This is **not a model**. A selector builds it from:
-- `Patient`, `EmergencyContact` and `UsualCareProvider`
-- current `CoreDatasetItem`s for elements with `in_emergency_summary`
-- current `Allergy`, `PatientComplication`, `Medication` and `TransfusionAlert` entries
-- the current `EmergencyCarePlan`
+**Emergency summary** (ADR 0004 4a). *Content provisional, awaiting clinical-lead
+sign-off.* A selector, not a model, showing:
+- SCD confirmed and genotype
+- allergies
+- blood group and Rh
+- transfusion reactions or antibodies
+- current medicines, including hydroxyurea (and its dose), folic acid and penicillin
+  prophylaxis when "yes", plus other medicines
+- pain management and things to avoid
+- emergency contact
+- usual facility
 
-Every item shows its verification status and source. The selector has a fixed number of
+Each item shows its verification status and source. The selector has a fixed number of
 queries, tested.
 
 ### 3.10 Consent (`apps/access`)
 
-**Purpose:** standing consent from a patient (or guardian) to **a care team at a facility**,
-for one category.
-**Implements:** ADR 0005 (as amended 18 Nov 2026); PRD §7.9, §10.8, §12.2.3, §12.4.
-**Uses:** P T A. **No S:** consent is revoked, never deleted.
+**Purpose:** standing consent that makes **a care team at a facility eligible** for access
+in one category. **Consent alone opens nothing:** each visit also needs a
+`VisitAuthorisation` (§3.11).
+**Implements:** ADR 0005; PRD §10.8, §12.2.3, §12.4. **Uses:** P T A. **No S** (revoked,
+never deleted).
 
 | Field | Type | Notes |
 |---|---|---|
@@ -680,78 +650,155 @@ for one category.
 | `category` | `TextChoices` | `emergency_summary`, `full_scd_record`, `lab_results` |
 | `granted_at` | `DateTimeField` | |
 | `granted_by_guardian` | FK GuardianRelationship, `PROTECT`, null | |
-| `capture_method` | `TextChoices` | `otp_to_patient_phone` (proposed default, Q-C2), `signed_form` (fallback when there's no phone; Q-C4), `patient_app` (future) |
-| `otp_verified_at` | `DateTimeField`, null | Required when `capture_method = otp_to_patient_phone` |
+| `capture_method` | `TextChoices` | `otp`, `signed_form` (no phone; Q-C4) |
+| `otp_challenge` | OneToOne OtpChallenge, `PROTECT`, null | Set when the method is `otp` |
 | `recorded_by` | FK User, `PROTECT` | |
-| `review_due_on` | `DateField` | `granted_at` + 1 year: a reminder is sent; consent does **not** lapse |
+| `review_due_on` | `DateField` | +1 year; a reminder only |
 | `last_reviewed_at` | `DateTimeField`, null | |
 | `revoked_at` / `revocation_note` | `DateTimeField`, null / `TextField` | |
 
 - **Constraints:**
   - One active consent per `(patient, grantee_team, category)`.
   - `revoked_at >= granted_at`.
-  - `otp_verified_at` is set if and only if the method is OTP.
-- **Indexes:** `(patient, revoked_at)`, `(grantee_team, revoked_at)`, `review_due_on`.
-- **Rule:** a user acts under consent only with an active `CareTeamMembership` in
-  `grantee_team`. **There's no OTP at each visit** under standing consent (Q-C2, *proposed,
-  pending group confirmation*).
+  - `otp_challenge` is set if and only if the method is `otp`.
 
-### 3.11 BreakGlassAccess (`apps/access`)
+### 3.11 VisitAuthorisation (`apps/access`)
 
-**Purpose:** an emergency override of consent (ADR 0004 4b). In the pilot this is the path
-for **ED staff outside the SCD Clinic team**.
-**Implements:** PRD §9.3.1, §10.9, §12.2.5, §13.1.6. **Uses:** P T. **No S.**
+**Purpose:** the patient's per-visit authorisation (ADR 0005, **decided 19 Nov: OTP at every
+visit**). It opens a time-limited access window for an eligible care team.
+**Implements:** ADR 0005; PRD §12.2.1, §12.4.2. **Uses:** P T, plus G (only the end and review
+columns may change).
 
 | Field | Type | Notes |
 |---|---|---|
 | `patient` | FK Patient, `PROTECT` | |
-| `invoked_by` | FK StaffProfile, `PROTECT` | Clinician cadre, with an active clinical membership at `facility` |
-| `facility` | FK Facility, `PROTECT` | Must be `active` |
-| `reason_code` | `TextChoices` | `unconscious`, `unable_to_communicate`, `refused_but_clinically_necessary`, `normal_access_not_possible`, `other` |
-| `reason_text` | `TextField` | Required, with a minimum length |
-| `scope` | `TextChoices` | `emergency_summary` only (ADR 0004 4a) |
-| `started_at` / `expires_at` | `DateTimeField` | `expires_at = started_at + 12h` |
-| `ended_at` | `DateTimeField`, null | |
-| `patient_notified_at` / `notification_status` | `DateTimeField`, null / `TextChoices` | `pending`, `sent`, `failed`, `no_phone` |
-| `reviewed_by` / `reviewed_at` | FK User, `PROTECT`, null / `DateTimeField` | |
-| `review_outcome` / `review_notes` | `TextChoices` / `TextField` | `appropriate`, `inappropriate`, `needs_follow_up` |
+| `care_team` | FK CareTeam, `PROTECT` | Must hold an active consent at creation (service) |
+| `requested_by` | FK StaffProfile, `PROTECT` | Member of `care_team` |
+| `method` | `TextChoices` | `otp`, `fallback` |
+| `otp_challenge` | OneToOne OtpChallenge, `PROTECT`, null | Required for `otp` |
+| `fallback_reason_code` | `TextChoices`, blank | `no_phone`, `no_signal`, `guardian_holds_phone`, `patient_unable`, `other` (**proposed**) |
+| `fallback_reason_text` | `TextField`, blank | Required for `fallback` |
+| `started_at` / `expires_at` | `DateTimeField` | **Proposed:** until the visit ends, at most 12 h |
+| `ended_at` / `end_reason` | `DateTimeField`, null / `TextChoices` | `visit_ended`, `expired`, `consent_revoked` |
+| `reviewed_by` / `reviewed_at` / `review_outcome` / `review_notes` | as `BreakGlassAccess` | **Fallback only**, reviewed like break-glass (proposed) |
 
 - **Constraints:**
-  - `started_at < expires_at <= started_at + interval '12 hours'`.
+  - `method = otp` ⇔ `otp_challenge` is set and the fallback fields are blank.
+  - `method = fallback` ⇔ `fallback_reason_text` isn't empty and there's no
+    `otp_challenge`.
+  - `started_at < expires_at <= started_at + 12 h`.
+  - The review fields are all set or all null, and are set only for `fallback`.
+- **Indexes:** `(patient, care_team, expires_at)`, partial `(reviewed_at)` where the method
+  is `fallback` (the review queue).
+- **Access rule:** a user acts under consent only when **all** of these hold:
+  - they are an active member of `care_team`
+  - the team holds an active consent for the category being viewed
+  - there's an unended, unexpired `VisitAuthorisation` for `(patient, care_team)`
+- **Proposed:** the authorisation covers the whole care team for that visit, not only the
+  requester (Q-C6).
+
+### 3.12 OtpChallenge (`apps/access`)
+
+**Purpose:** a one-time code sent to the patient (or a minor's guardian) to grant consent to
+a new care team or to authorise a visit. Patient login will reuse it later.
+**Uses:** P T, plus G (only `attempts` and `verified_at` change).
+
+| Field | Type | Notes |
+|---|---|---|
+| `patient` | FK Patient, `PROTECT` | |
+| `purpose` | `TextChoices` | `consent_grant`, `visit_access` (`patient_login` later) |
+| `sent_to_identifier` | FK PatientIdentifier (phone), `PROTECT`, null | |
+| `sent_to_guardian` | FK GuardianRelationship, `PROTECT`, null | For minors |
+| `code_hash` | `CharField(64)` | HMAC-SHA256 of the code with a server secret; the code is never stored or logged |
+| `expires_at` | `DateTimeField` | Short (e.g. 10 min; setting) |
+| `attempts` | `PositiveSmallIntegerField` | Locked after a maximum (setting, e.g. 5) |
+| `verified_at` | `DateTimeField`, null | |
+| `requested_by` / `facility` | FK User / FK Facility, `PROTECT` | |
+
+- **Constraints:**
+  - Exactly one of `sent_to_identifier` / `sent_to_guardian` is set.
+  - `expires_at > created_at`.
+- **Rate limit:** requests per patient per hour are rate-limited (Q-S3).
+
+### 3.13 BreakGlassAccess (`apps/access`)
+
+**Purpose:** emergency override (ADR 0004 4b). The only cadres allowed are **medical
+officers and clinical officers** (*provisional*), via `Cadre.may_break_glass`.
+**Uses:** P T, plus G.
+
+| Field | Type | Notes |
+|---|---|---|
+| `patient` | FK Patient, `PROTECT` | |
+| `invoked_by` | FK StaffProfile, `PROTECT` | `may_break_glass` cadre, with an active clinical membership at `facility` |
+| `facility` | FK Facility, `PROTECT` | `active` |
+| `reason_code` / `reason_text` | `TextChoices` / `TextField` (required) | |
+| `scope` | `TextChoices` | `emergency_summary` |
+| `started_at` / `expires_at` / `ended_at` | `DateTimeField` | `expires_at <= started_at + 12 h` |
+| `patient_notified_at` / `notification` | `DateTimeField`, null / OneToOne SmsMessage, `PROTECT`, null | The SMS contains **no medical information** (§3.14) |
+| `reviewed_by` / `reviewed_at` / `review_outcome` / `review_notes` | | |
+
+- **Constraints:**
+  - `started_at < expires_at <= started_at + 12 h`.
   - `reason_text` isn't empty.
   - The review fields are all set or all null.
-  - A trigger (M4) blocks changes to the core columns after insert.
 - **Indexes:** `(patient, started_at)`, `(reviewed_at)`, `(facility, started_at)`.
 
-### 3.12 AccessSession, AccessEvent, SearchEvent (`apps/access`)
+### 3.14 SmsMessage (`apps/notifications`)
 
-**Implements:** ADR 0005; PRD §11.6, §12.4.2, §13.1.7, §13.1.8, §13.1.9.
+**Purpose:** a record of every SMS sent. **The SMS design is proposed, pending group
+confirmation** (ADR 0004 4c).
+**Uses:** P T, plus G (only status fields change).
+
+| Field | Type | Notes |
+|---|---|---|
+| `patient` | FK Patient, `PROTECT` | |
+| `purpose` | `TextChoices` | `enrolment_continuum_id`, `otp`, `break_glass_notice`, `fallback_access_notice`, `consent_review_reminder` |
+| `template_key` | `CharField(50)` | One of the fixed templates in code |
+| `sent_to_identifier` / `sent_to_guardian` | as `OtpChallenge` | |
+| `provider` / `provider_message_id` | `CharField` | |
+| `status` | `TextChoices` | `queued`, `sent`, `delivered`, `failed` |
+| `sent_at` / `status_at` | `DateTimeField`, null | |
+| `error_code` | `CharField`, blank | |
+
+- **The message body is never stored.** It is rebuilt from `template_key` if needed.
+  - OTP codes reach the provider only.
+  - The Continuum ID is the only patient data in any template.
+- **Templates** (proposed wording; **no medical information, ever**):
+  - `enrolment_continuum_id`: "Your Continuum ID is CH-XXXXXX. Keep this message and show it
+    when you visit a clinic."
+  - `otp`: "Your Continuum code is NNNNNN. It expires in 10 minutes. Do not share it."
+  - `break_glass_notice` / `fallback_access_notice`: "Your Continuum record was opened on
+    DD/MM/YYYY. If you have questions, call 07XX XXX XXX."
+- **Test:** every template is checked against a list of banned words (diagnosis, sickle,
+  SCD, genotype, drug names, facility names), so a medical term can't slip into a template.
+- **Sender ID and brand:** if Continuum is known as an SCD-only service, the sender name
+  itself reveals the diagnosis (Q-S1).
+- **Sending** goes through a Celery task (provider network call, retries); the request never
+  waits on it.
+
+### 3.15 AccessSession, AccessEvent, SearchEvent (`apps/access`)
+
+**Implements:** ADR 0005; PRD §11.6, §12.4.2, §13.1.7–§13.1.9.
 
 #### AccessSession
 
-**Purpose:** one opening of one patient's record.
-**Uses:** P, `created_at`.
+**Uses:** P, `created_at`, plus G (only `last_activity_at`, `closed_at` and `close_reason`
+change).
 
 | Field | Type | Notes |
 |---|---|---|
 | `patient` | FK Patient, `PROTECT` | |
-| `user` | FK User, `PROTECT` | |
-| `staff_cadre` | FK Cadre, `PROTECT`, null | Copied at open time |
-| `facility` | FK Facility, `PROTECT`, null | The acting facility |
-| `care_team` | FK CareTeam, `PROTECT`, null | The team whose consent is used |
-| `basis` | `TextChoices` | `consent`, `break_glass`, `self`, `guardian`, `administrative` |
-| `consent` / `break_glass` | FK Consent / FK BreakGlassAccess, `PROTECT`, null | |
-| `opened_at` / `last_activity_at` / `closed_at` | `DateTimeField` (`closed_at` null) | `last_activity_at` is updated at most once a minute |
-| `close_reason` | `TextChoices`, blank | `user_ended`, `logout`, `idle_timeout`, `break_glass_expired`, `consent_revoked` |
+| `user` / `staff_cadre` / `facility` | FK User / FK Cadre / FK Facility, `PROTECT` | Copied at open time |
+| `basis` | `TextChoices` | `visit_authorisation`, `break_glass`, `self`, `guardian`, `administrative` |
+| `visit_authorisation` / `break_glass` | FK, `PROTECT`, null | |
+| `opened_at` / `last_activity_at` / `closed_at` | `DateTimeField` | |
+| `close_reason` | `TextChoices`, blank | `user_ended`, `logout`, `idle_timeout`, `authorisation_expired`, `consent_revoked` |
 
-- **Approximate duration** = `(closed_at or last_activity_at) − opened_at`, computed.
+- **Approximate duration** = `(closed_at or last_activity_at) − opened_at`.
 - **Constraints:**
-  - `basis = consent` requires `consent` and `care_team`.
-  - `basis = break_glass` requires `break_glass`.
+  - The basis requires its matching FK.
   - `closed_at >= opened_at`.
   - `close_reason` is set if and only if `closed_at` is set.
-  - A trigger allows only `last_activity_at`, `closed_at` and `close_reason` to change.
-- **Indexes:** `(patient, opened_at)`, `(user, opened_at)`, a partial index on open sessions.
 
 #### AccessEvent
 
@@ -761,8 +808,8 @@ for **ED staff outside the SCD Clinic team**.
 |---|---|---|
 | `session` | FK AccessSession, `PROTECT` | |
 | `action` | `TextChoices` | `view`, `create`, `update`, `verify`, `dispute`, `retract`, `export` |
-| `section` | `TextChoices` | `emergency_summary`, `scd_dataset`, `allergies`, `complications`, `medications`, `transfusion`, `care_plan`, `usual_care`, `identifiers`, `consent` |
-| `object_public_id` | `UUIDField`, null | Never a value |
+| `section` | `TextChoices` | `emergency_summary`, `scd_dataset`, `allergies`, `complications`, `medications`, `transfusion`, `admissions`, `care_plan`, `usual_care`, `identifiers`, `consent` |
+| `object_public_id` | `UUIDField`, null | |
 
 #### SearchEvent
 
@@ -770,136 +817,115 @@ for **ED staff outside the SCD Clinic team**.
 
 | Field | Type | Notes |
 |---|---|---|
-| `user` | FK User, `PROTECT` | |
-| `facility` | FK Facility, `PROTECT` | |
-| `method` | `TextChoices` | `continuum_id`, `identifier`, `name_dob_sex`, `emergency_card` |
-| `identifier_type` | `TextChoices`, blank | The type only, **never the value** |
+| `user` / `facility` | FK, `PROTECT` | |
+| `method` | `TextChoices` | `continuum_id`, `identifier`, `name_dob_sex` |
+| `identifier_type` | `TextChoices`, blank | The type only, never the value |
 | `result_count` | `PositiveSmallIntegerField` | |
 | `selected_patient` | FK Patient, `PROTECT`, null | |
 | `match_level` | `TextChoices`, blank | `confirmed`, `probable` |
-
-### 3.13 EmergencyCard (`apps/patients`)
-
-**Purpose:** a card or QR code showing only "Sickle Cell Disease" + the Continuum ID.
-**Implements:** ADR 0004 4c (**pending one member's confirmation**). **Uses:** P T A. **No S.**
-
-| Field | Type | Notes |
-|---|---|---|
-| `patient` | FK Patient, `PROTECT` | |
-| `token_hash` | `CharField(64)`, unique | SHA-256 of a random 128-bit token. The QR encodes `https://<host>/e/<token>`; the raw token is never stored |
-| `issued_at` / `issued_by` | `DateTimeField` / FK User, `PROTECT` | |
-| `patient_agreed_at` | `DateTimeField` | The card discloses the diagnosis, so explicit agreement is required |
-| `revoked_at` / `revoke_reason` | `DateTimeField`, null / `TextChoices` | `lost`, `replaced`, `patient_request`, `deceased` |
-
-- **Constraints:** one unrevoked card per patient.
-- **Scanning:**
-  - **Without a login:** the page shows only what is printed on the card, plus a login
-    prompt. It is rate-limited, and the response is the same for revoked and unknown
-    tokens.
-  - **A logged-in clinician:** gets a confirmed Search & Find result, logged as
-    `SearchEvent(method=emergency_card)`. No clinical access without consent or
-    break-glass.
 
 ---
 
 ## 4. Where the PRD and the ADRs still disagree
 
-The PRD has not been revised. Decided changes are logged in `docs/prd-changes.md` (PC-n).
-
 | # | Topic | PRD says | ADR / model says | State |
 |---|---|---|---|---|
-| D1 | Who verifies | Only an authorised **physician** (§8.2.1, §10.6, §11.1.2, §11.5.1, §12.2.5, §13.1.3) | Configurable per cadre and category (ADR 0001); §7.4 agrees | Decided → PC-1 |
-| D2 | Verification statuses | §7.4: patient-reported, clinician-documented, clinically verified, requiring review/update; §8.10 "potentially outdated" | `unverified` / `clinician_verified` / `disputed` / `retracted`, plus `source` (patient, clinician, import) | Decided → PC-2; "requiring review" open (Q-V2) |
-| D3 | Record-level status | §11.1.3: maintained | Derived | Decided → PC-3 |
-| D4 | Identifiers | Government ID TBC / optional / required (§7.1, §8.2, §11.1); no Client Registry or SHA | Identifier table (ADR 0003) | Decided → PC-4; required set open (Q-I4) |
-| D5 | Sex vs gender | "Gender" everywhere | `sex` required (matching, clinical care); `gender` optional | **Decided 18 Nov** → PC-5 |
-| D6 | Biometrics | In MVP features (§8.5.1.1, §9.1.1, §10.4) | Removed (ADR 0004 4d) | Decided → PC-6 |
-| D7 | Consent grantee and duration | Undefined | A care team at a facility, until revoked, with annual review | **Decided 18 Nov** → PC-7 |
-| D8 | Per-visit OTP | OTP each normal-care session (§12.2.1) | No OTP per visit under standing consent; OTP only to grant consent to a new care team, and for patient login | **Proposed**, pending group confirmation |
-| D9 | Emergency access scope | Requester identifies the information needed; restricted information reachable (§12.2.4, §12.2.5) | Emergency summary only | Decided → PC-8 |
-| D10 | Unverified items at Basic Access | §12.2.2: "*verified*" items only | Shown and labelled in emergency; Basic Access not yet decided | Open (Q-C3) |
-| D11 | Who may invoke emergency access | Nurses conditionally (§9.2) or unconditionally (§6.3) | Any clinician at a registered facility; "clinician" cadres undefined | Open (Q-E1) |
-| D12 | Emergency duration and notification | No limit; notified "when appropriate" | 12-hour expiry; SMS always | Decided → PC-9 |
-| D13 | Emergency card / QR | Not mentioned | Card with SCD + Continuum ID | Pending one member (4c) |
-| D14 | Restricted information | A restricted/sensitive layer (§12.1, §12.2.4, §13.1.5) | Three consent categories, no restricted layer | Open (prd-review Q21) |
-| D15 | Minors in the pilot | §10.1 in the MVP; §14.3 adolescents and adults | In the data model; enrolment by the clinical lead and ethics | Decided (model) → PC-10 |
-| D16 | Multi-facility | One facility (§14.2, §16.3) | Multi-facility model; ED-vs-SCD-clinic test via care teams | Decided → PC-11 |
-| D17 | SCD dataset | Seven categories (§8.3, §14.5): diagnosis, complications, major hospitalisations, allergies, treatment history, care plans, treatment responses | Agreed list (§3.6). **Not in it:** hospitalisation details, treatment history, treatment responses, emergency care plan as a whole. **Added:** genotype, blood group, baseline Hb, hydroxyurea, folic acid, transfusions, usual facility/clinician, emergency contact | Agreed; awaits clinical-lead sign-off → PC-12 |
-| D18 | Blood group | §7.6: TBC | Required element | Agreed (with D17) → PC-12 |
-| D19 | Hospital patient ID | §7.1, §10.16: retained and linked | `facility_mrn` identifier type | Open (Q-I5) |
-| D20 | Emergency contacts as an identification method | §8.5.1.1 | Not searchable; unconscious patients without documents are out of scope | Decided (4d) → PC-6 |
+| D1 | Who verifies | Physician only (§8.2.1, §10.6, §11.1.2, §11.5.1, §12.2.5, §13.1.3) | Configurable; defaults MO/CO all, lab tech lab values, nurse allergies | Decided (mechanism) → PC-1; defaults *provisional* |
+| D2 | Verification statuses | §7.4 four statuses; §8.10 "outdated" | `unverified` / `clinician_verified` / `disputed` / `retracted` + `source` | Decided → PC-2 |
+| D3 | Record-level status | Maintained (§11.1.3) | Derived | Decided → PC-3 |
+| D4 | Identifiers | Inconsistent (§7.1, §8.2, §11.1) | Identifier table (ADR 0003) | Decided → PC-4 |
+| D5 | Sex vs gender | "Gender" everywhere | **Sex only** (required); no gender field | **Decided 19 Nov** → PC-5 |
+| D6 | Biometrics | In MVP features | Removed | Decided → PC-6 |
+| D7 | Consent grantee | Undefined | A care team at a facility (eligibility) | Decided → PC-7 |
+| D8 | Per-visit OTP | OTP each session (§12.2.1) | **Kept**: OTP at every visit; session until visit end, max 12 h, and OTP fallback are *proposed* | **Decided 19 Nov (B)** → PC-7a; details proposed |
+| D9 | Emergency access scope | Requester picks; restricted reachable | Emergency summary only, content *provisional* | Decided → PC-8 |
+| D10 | Unverified items at Basic Access | "Verified" items only (§12.2.2) | Undecided for Basic Access | Open (Q-C3) |
+| D11 | Who may invoke emergency access | Nurses conditionally / unconditionally | MO and CO only | *Provisional* → PC-9 |
+| D12 | Emergency duration and notification | No limit; "when appropriate" | 12 h; SMS with no medical information | Decided → PC-9 |
+| D13 | Emergency card / QR | Not in the PRD | **No card or QR.** Continuum ID sent by SMS at enrolment | **Decided 19 Nov** (no card); SMS design *proposed* → PC-13 |
+| D14 | Restricted information | A restricted layer | No restricted category | Open (prd-review Q21) |
+| D15 | Minors in the pilot | §10.1 in the MVP; §14.3 adolescents and adults | The pilot enrols adults **and children** | *Provisional* (clinical lead + ethics) → PC-10 |
+| D16 | Multi-facility | One facility | Multi-facility model | Decided → PC-11 |
+| D17 | SCD dataset | Seven categories (§8.3, §14.5) | Element list §3.6; admissions recorded from enrolment; treatment history/responses deferred to phase 2 | List *provisional*; Q-D6 *proposed* → PC-12, PC-14 |
+| D18 | Blood group | TBC (§7.6) | Required | *Provisional* → PC-12 |
+| D19 | Hospital patient ID | Linked (§7.1, §10.16) | `facility_mrn` type | Open (Q-I5) |
+| D20 | Emergency contacts as an identification method | §8.5.1.1 | Not searchable | Decided → PC-6 |
+| D21 | Product scope | SCD-only (§16.2), with expansion as future (§17.2) | Should the design anticipate other chronic illnesses? | Open (scope question, `decisions-pending.md`) |
 
 ---
 
 ## 5. Open questions
 
-Resolved on 18 Nov 2026 and removed from this list:
-- Q-V1 (`unverified` + `source`)
-- Q-C1 and Q-M1 (care teams)
-- D5 (sex and gender)
-- Q-M2 to Q-M5 (EAV-lite with guard rails, supersession, triggers, `pg_trgm`)
-- The former Q-D1 to Q-D4 (replaced by the agreed list)
+Resolved since the last version:
+- Q-C2: OTP every visit
+- Q-E1: MO / CO, provisional
+- Q-E2: no card
+- Q-D1: mg/day, provisional
+- Q-D2: any ward admission, provisional
+- D5: sex only
 
-Q-C2 is now *proposed*.
+Q-D6 is now *proposed*.
 
-### Dataset (for clinical-lead sign-off)
-- **Q-D1.** Hydroxyurea dose unit: mg/kg/day or mg/day?
-- **Q-D2.** What counts as a "hospitalisation" in the last 12 months: an admission of 24
-  hours or more? ED visits?
-- **Q-D3.** Which elements appear in the emergency summary (the "Summary" column in §3.6
-  is a proposal).
-- **Q-D4.** Blood group: may only a lab report or a clinician verify it?
-- **Q-D5.** The test-method code list for `GenotypeTest` is proposed, not agreed.
-- **Q-D6.** Are hospitalisation details, treatment history and treatment responses (PRD
-  §8.3) deliberately dropped from the MVP, or deferred to encounters (D17)?
+### Dataset (clinical lead)
+- **Q-D3.** Confirm the emergency summary content, including ⚑3 and ⚑4 in §3.6.
+- **Q-D4.** Blood group: verifiable by a lab technologist only from a lab report?
+- **Q-D5.** ⚑5: genotype as a lab value; sickling/solubility screen as evidence.
+- **Q-D6.** *Proposed:* admissions recorded from enrolment; treatment history and responses
+  in phase 2. Also confirm the `admission_reason` list.
+- **Q-D7.** Are care-plan fields other than pain management (fluids/oxygen, other) shown in
+  emergencies, or kept at all?
+- **Q-D8.** ⚑1: genotype Required vs Optional.
+- **Q-D9.** ⚑2: what "number of transfusions" means.
 
 ### Verification
-- **Q-V2.** Is "requiring review/update" (PRD §7.4) a status, or derived from review dates?
-- **Q-V3.** Who can set `disputed`, and who resolves a dispute?
-- **Q-V4.** May a clinician verify an item they entered themselves?
-- **Q-V5.** Confirm that `UsualCareProvider` and `EmergencyContact` need no clinical
-  verification.
+- **Q-V2.** Is "requiring review/update" (PRD §7.4) a status or derived?
+- **Q-V3.** Who can set `disputed`, and who resolves it?
+- **Q-V4.** May a clinician verify their own entry?
+- **Q-V5.** Confirm that usual care and emergency contact are not verified.
+- **Q-V6.** Consultants/specialists: a cadre of their own, or included with medical
+  officers? (Not in the 19 Nov answers.)
 
 ### Identifiers
-- **Q-I1.** Is phone a strong identifier? The plan says no.
-- **Q-I2.** Field-level encryption for national ID / SHA numbers?
-- **Q-I3.** The Continuum ID is canonical on `Patient` and mirrored in `PatientIdentifier`.
-  OK?
-- **Q-I4.** Which identifiers are required at registration? Children often have only a
-  birth certificate.
-- **Q-I5.** Hospital patient number (`facility_mrn`): include it, and is it strong?
+- **Q-I1.** Is phone strong? The plan says no.
+- **Q-I2.** Encrypt national ID / SHA numbers?
+- **Q-I3.** Continuum ID mirrored in the identifier table: OK?
+- **Q-I4.** Which identifiers are required at registration?
+- **Q-I5.** The hospital patient number (`facility_mrn`).
 
-### Consent and access
-- **Q-C2.** *Proposed:* no OTP at each visit under standing consent; OTP only for granting
-  consent to a new care team and for patient login. **Pending group confirmation.**
-- **Q-C3.** What does a consented clinician see first (PRD "Basic Access"), and does
-  `emergency_summary` consent equal Basic Access?
-- **Q-C4.** Consent capture for patients with no phone: a signed form? Who checks it?
-- **Q-C5.** Administrative access by hospital or Continuum admins (prd-review Q22, Q23).
-  The plan allows none until decided.
-- **Q-A1.** Idle timeout for a patient-record session (30 minutes like login, or shorter)?
-- **Q-A2.** Who may see a patient's access history inside the system?
-- **Q-A3.** Log views per section (plan) or per field?
+### Consent, visits and access
+- **Q-C3.** Basic Access content and labelling (D10).
+- **Q-C4.** Consent capture without a phone (signed form?).
+- **Q-C5.** Administrator access (prd-review Q22, Q23).
+- **Q-C6.** *Proposed:* a visit authorisation covers the whole care team for that visit.
+  Confirm.
+- **Q-C7.** *Proposed:* session until the visit ends, maximum 12 h. Who ends the visit, and
+  is it ended automatically at discharge?
+- **Q-C8.** *Proposed:* the OTP fallback. Which cadres may use it? Who reviews it, and
+  within how long? Is the patient notified by SMS afterwards (template
+  `fallback_access_notice`)?
+- **Q-A1.** Idle timeout for record sessions.
+- **Q-A2.** Who sees a patient's access history?
+- **Q-A3.** Log per section (plan) or per field?
 
-### Emergency
-- **Q-E1.** Which cadres are "clinicians" for break-glass?
-- **Q-E2.** Card QR: revocable token (plan) or the plain Continuum ID?
-- **Q-E3.** Who reviews break-glass events, and within how many days?
+### Emergency and SMS
+- **Q-E3.** Break-glass reviewer and deadline.
 - **Q-E4.** Break-glass on a minor: SMS to the guardian, the patient, or both?
+- **Q-S1.** *Proposed SMS design:* the sender ID and wording must not reveal SCD. Is
+  "Continuum" itself revealing if the service is SCD-only (see D21)?
+- **Q-S2.** SMS provider (e.g. an aggregator with a Kenyan sender ID).
+- **Q-S3.** OTP expiry, attempt limit and resend limit.
 
 ### Minors
 - **Q-G1.** PRD §8.8.1.4: the guardian's access after 18, re-verification, credentials.
-- **Q-G2.** More than one active guardian at once? The plan allows it.
+- **Q-G2.** More than one active guardian at once?
+- **Q-G3.** For a minor, do OTPs go to the guardian's phone by default? The 19 Nov fallback
+  reason "guardian holds phone" suggests the patient's own phone is the default. Clarify
+  for adolescents.
 
 ### Technical
-- **Q-T1.** `pg_trgm` needs a role that can create extensions. Local and CI use `postgres`;
-  confirm the production database allows it, or have the extension pre-created by the
-  database administrator.
-- **Q-R1.** Who may read `clinical_scd_dataset_wide`? Proposal: a separate read-only
-  reporting database role, granted later, with no access from the web app's reporting
-  pages until reporting permissions are designed.
-- **Q-M6.** Patients and staff split into `apps/patients` and `apps/staff`, rather than
-  extending `apps/accounts`.
+- **Q-T1.** `pg_trgm` extension privilege in production.
+- **Q-R1.** Access to the reporting view.
+- **Q-M6.** The app split (`apps/patients`, `apps/staff`, `apps/notifications`).
 
 ---
 
@@ -907,15 +933,16 @@ Q-C2 is now *proposed*.
 
 Each step is its own plan → tests (RED) → implementation → verification report cycle:
 
-1. The append-only base and trigger helpers (`apps/core`), with tests.
-2. Facilities, care teams, cadres, staff profiles and memberships.
-3. Patient (with sex and gender), identifiers, emergency contacts, `pg_trgm`, search and
-   matching, and `SearchEvent`.
+1. **The append-only base and trigger helpers** (`apps/core`): L and G, with tests.
+2. Facilities, care teams, cadres (provisional seed), staff profiles and memberships.
+3. Patient (sex only), identifiers, emergency contacts, `pg_trgm`, search and matching,
+   and `SearchEvent`.
 4. Access sessions and events.
-5. Code systems, dataset elements, `CoreDatasetItem` with its `CHECK`, partial unique index
-   and type trigger, the reporting view, and verification (rules stay empty until
-   sign-off).
-6. Linked entries, the emergency care plan and the emergency summary selector.
-7. Consent, then break-glass and the SMS notification (needs an SMS provider decision).
-8. Guardians and the transition.
-9. The emergency card, if 4c is confirmed.
+5. Code systems, dataset elements (provisional seed), `CoreDatasetItem` with its `CHECK`,
+   unique index and trigger, the reporting view, and verification (provisional
+   permissions, disabled in production until sign-off).
+6. Linked entries (including `Admission`, once Q-D6 is confirmed), the care plan and the
+   emergency summary selector.
+7. SMS (`SmsMessage`, templates, provider) and `OtpChallenge`.
+8. Consent, `VisitAuthorisation` (OTP and fallback), then break-glass.
+9. Guardians and the transition.
